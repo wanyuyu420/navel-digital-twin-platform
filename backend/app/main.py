@@ -20,11 +20,8 @@ from app.api.router import api_router
 from app.schemas.data import WaterLevelOut, RainfallOut, StatsOut, WarningOut, MetricLatestOut
 from app.tasks import realtime_push_task
 
-from app.api.v1.orange import router as orange_router
 
 app = FastAPI(title="Water Digital Twin Backend", version="1.0.0")
-
-app.include_router(orange_router)
 
 # --- GIS Data Path Configuration ---
 _settings = get_settings()
@@ -505,4 +502,3 @@ async def get_all_warnings(is_simulated: bool | None = None, session: AsyncSessi
     return fallback
 
 
-# 将我们新建的 orange_router 注册进系统，正式向前端Vue开放访问权限。

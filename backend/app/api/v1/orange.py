@@ -1,4 +1,10 @@
-from fastapi import APIRouter, Depends, status
+import os
+import shutil
+import uuid
+from typing import List, Dict, Any
+
+from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import func, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,8 +16,10 @@ from app.schemas.orange import (
     FertilizerStat,
     OrangeTreeOut,
 )
+from app.services.tif_service import TifResolver
 
 router = APIRouter(prefix="/orange", tags=["脐橙三维空间大屏诊断API"])
+
 
 
 @router.post(
@@ -139,4 +147,101 @@ async def spatial_diagnose(
             heavy_level_count=result.heavy_count or 0,
         ),
         trees=trees_out,
+    )
+
+UPLOAD_DIR = "data/uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+class FreshTreeResponse(BaseModel):
+    tree_id: int
+    geometry_geojson: Dict[str, Any]
+    attributes: Dict[str, Any]
+
+class TifUploadResponse(BaseModel):
+    success: bool
+    message: str
+    file_path: str
+    spatial_info: Dict[str, Any]  # 3.2 新增：回传前端核验的空间参考信息
+    fresh_trees: List[FreshTreeResponse]
+
+
+@router.post("/upload-tif", response_model=TifUploadResponse, status_code=status.HTTP_201_CREATED)
+async def upload_orange_tif(file: UploadFile = File(...)):
+    """
+    接口 B: 接收前端上传的最新无人机正射二进制 TIF 文件并安全落地 + 现场空间参考扣留
+    """
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in [".tif", ".tiff"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="非法文件格式！系统只接受 .tif 或 .tiff 格式的无人机正射影像。"
+        )
+        
+    unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
+    target_path = os.path.join(UPLOAD_DIR, unique_filename)
+    
+    try:
+        # 3.1 阶段：流式对拷物理落地
+        with open(target_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        if os.path.exists(target_path):
+            os.remove(target_path)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"文件流写入服务器硬盘失败: {str(e)}"
+        )
+    finally:
+        await file.close()
+
+    # 获取落地的绝对物理路径
+    absolute_file_path = os.path.abspath(target_path)
+    
+    # ==================== 【3.2 关键合流】：大总台实例化并提取空间参考 ====================
+    try:
+        # 1. 实例化方法类，交接物理文件路径的接力棒
+        resolver = TifResolver(file_path=absolute_file_path)
+        
+        # 2. 调用核心方法，现场去拔大文件的地理皮肤
+        spatial_data = resolver.extract_spatial_reference()
+        
+    except Exception as geo_err:
+        # 如果 rasterio 在读取地理头信息时崩溃（如 TIF 损坏或 conda 依赖损坏），及时报错
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"【3.2 空间参考扣留失败】请检查 Conda 环境中的 rasterio 依赖: {str(geo_err)}"
+        )
+    # ==================================================================================
+
+    # 【当前战术妥协】：下游算法继续用 Mock 数据垫付
+    mock_fresh_trees = [
+        {
+            "tree_id": 999,
+            "geometry_geojson": {
+                "type": "Polygon",
+                "coordinates": [[
+                    [114.0, 25.0], 
+                    [114.001, 25.0], 
+                    [114.001, 25.001], 
+                    [114.0, 25.001], 
+                    [114.0, 25.0]
+                ]]
+            },
+            "attributes": {
+                "height_m": 2.8,
+                "Area_m2": 4.1,
+                "compactness": 0.88,
+                "vari": 0.35,
+                "fertilizer_level": 2
+            }
+        }
+    ]
+
+    # 返回标准的响应，里面带上了刚由类抓出来的真实物理影像坐标数据
+    return TifUploadResponse(
+        success=True,
+        message="【3.1+3.2 双重通关】无人机影像接收成功且空间参考提取完毕！",
+        file_path=absolute_file_path,
+        spatial_info=spatial_data, # 吐给前端看，证明后端真的把照片底细摸清了
+        fresh_trees=mock_fresh_trees
     )
