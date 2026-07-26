@@ -8,6 +8,7 @@ from .hydrological import HydrologicalStation
 from .flood import FloodScenario, FloodFrame
 from .gis_layer import GISLayer
 from .hec_ras import HecRasScenario
+from .orange import OrangeTree
 
 __all__ = [
     "Base",
@@ -30,4 +31,5 @@ __all__ = [
     "FloodFrame",
     "GISLayer",
     "HecRasScenario",
+    "OrangeTree",
 ]
