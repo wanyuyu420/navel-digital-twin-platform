@@ -16,7 +16,11 @@ from app.schemas.orange import (
     FertilizerStat,
     OrangeTreeOut,
 )
-from app.services.tif_service import TifResolver
+from app.services.tif_service import TifService
+from pyproj import Transformer
+from app.services.sam_service import SamInferenceService
+from app.services.yolo_service import YoloService
+import rasterio
 
 router = APIRouter(prefix="/orange", tags=["脐橙三维空间大屏诊断API"])
 
@@ -161,8 +165,8 @@ class TifUploadResponse(BaseModel):
     success: bool
     message: str
     file_path: str
-    spatial_info: Dict[str, Any]  # 3.2 新增：回传前端核验的空间参考信息
-    fresh_trees: List[FreshTreeResponse]
+    spatial_info: Dict[str, Any]
+    task_id: str = ""
 
 
 @router.post("/upload-tif", response_model=TifUploadResponse, status_code=status.HTTP_201_CREATED)
@@ -200,10 +204,15 @@ async def upload_orange_tif(file: UploadFile = File(...)):
     # ==================== 【3.2 关键合流】：大总台实例化并提取空间参考 ====================
     try:
         # 1. 实例化方法类，交接物理文件路径的接力棒
-        resolver = TifResolver(file_path=absolute_file_path)
+        # 使用 rasterio 直接提取空间参考（TifService 替代旧 TifResolver）
         
-        # 2. 调用核心方法，现场去拔大文件的地理皮肤
-        spatial_data = resolver.extract_spatial_reference()
+        # 2. 利用 rasterio 直接读取空间参考
+        import rasterio as _rio
+        with _rio.open(absolute_file_path) as _src:
+            spatial_data = {
+                "crs": str(_src.crs),
+                "transform": [t for t in _src.transform] if _src.transform else [],
+            }
         
     except Exception as geo_err:
         # 如果 rasterio 在读取地理头信息时崩溃（如 TIF 损坏或 conda 依赖损坏），及时报错
@@ -213,35 +222,171 @@ async def upload_orange_tif(file: UploadFile = File(...)):
         )
     # ==================================================================================
 
-    # 【当前战术妥协】：下游算法继续用 Mock 数据垫付
-    mock_fresh_trees = [
-        {
-            "tree_id": 999,
-            "geometry_geojson": {
-                "type": "Polygon",
-                "coordinates": [[
-                    [114.0, 25.0], 
-                    [114.001, 25.0], 
-                    [114.001, 25.001], 
-                    [114.0, 25.001], 
-                    [114.0, 25.0]
-                ]]
-            },
-            "attributes": {
-                "height_m": 2.8,
-                "Area_m2": 4.1,
-                "compactness": 0.88,
-                "vari": 0.35,
-                "fertilizer_level": 2
-            }
+    # Start real YOLO+SAM inference task
+    task_id = uuid.uuid4().hex[:12]
+    with _task_lock:
+        _task_store[task_id] = {
+            "task_id": task_id,
+            "status": "pending",
+            "message": "Task created",
+            "total_trees": 0,
+            "trees": [],
+            "progress": 0.0,
         }
-    ]
 
-    # 返回标准的响应，里面带上了刚由类抓出来的真实物理影像坐标数据
+    asyncio.create_task(asyncio.to_thread(_run_inference_task, task_id, absolute_file_path))
+
     return TifUploadResponse(
         success=True,
-        message="【3.1+3.2 双重通关】无人机影像接收成功且空间参考提取完毕！",
+        message="Upload success, YOLO+SAM inference started in background",
         file_path=absolute_file_path,
-        spatial_info=spatial_data, # 吐给前端看，证明后端真的把照片底细摸清了
-        fresh_trees=mock_fresh_trees
+        spatial_info=spatial_data,
+        task_id=task_id,
     )
+import asyncio
+import threading
+from datetime import datetime
+
+
+# ===== Async task store =====
+
+_task_store: dict = {}
+_task_lock = threading.Lock()
+
+
+class TaskStatusOut(BaseModel):
+    task_id: str
+    status: str  # pending | processing | completed | failed
+    message: str = ""
+    total_trees: int = 0
+    trees: list = []
+    progress: float = 0.0  # 0.0 ~ 1.0
+
+
+def _run_inference_task(task_id: str, file_path: str):
+    with _task_lock:
+        _task_store[task_id]["status"] = "processing"
+
+    try:
+        yolo_model = YoloService.get_instance()
+        sam_predictor = SamInferenceService.get_instance()
+
+        import rasterio as _rio
+        with _rio.open(file_path) as _src:
+            tif_crs = str(_src.crs)
+
+        transformer = Transformer.from_crs(tif_crs, "EPSG:4326", always_xy=True)
+
+        all_detected_trees = []
+        tile_count = 0
+
+        tiles = list(TifService.slice_tif_generator(file_path))
+        total_tiles = len(tiles)
+
+        for tile_info in tiles:
+            tile_rgb = tile_info["tile_data"]
+            valid_mask = tile_info["valid_mask"]
+            window_x = tile_info["window_x"]
+            window_y = tile_info["window_y"]
+            transform = tile_info["transform"]
+
+            # Smart skip: blank or low-contrast tiles
+            if tile_rgb.max() < 10 or tile_rgb.std() < 5:
+                tile_count += 1
+                _update_progress(task_id, tile_count, total_tiles)
+                continue
+
+            # Step 1: YOLO detects tree canopy boxes
+            boxes = YoloService.detect_boxes(tile_rgb, yolo_model, conf=0.15)
+            if len(boxes) == 0:
+                tile_count += 1
+                _update_progress(task_id, tile_count, total_tiles)
+                continue
+
+            # Step 2: SAM refines each box with Box Prompt
+            local_trees = SamInferenceService.infer_tile_with_boxes(
+                tile_rgb, valid_mask, boxes, sam_predictor)
+
+            # Step 3: Coordinate conversion + enrich with SAM results
+            for tree in local_trees:
+                local_cx, local_cy = tree["local_centroid"]
+                global_px = window_x + local_cx
+                global_py = window_y + local_cy
+                geo_x, geo_y = rasterio.transform.xy(
+                    transform, global_py, global_px, offset="center")
+                lng, lat = transformer.transform(geo_x, geo_y)
+                bbox = tree.get("bbox", (0, 0, 0, 0))
+                all_detected_trees.append({
+                    "lng": round(lng, 8),
+                    "lat": round(lat, 8),
+                    "area_pixels": tree["area_pixels"],
+                    "iou_score": round(tree.get("iou_score", 0), 4),
+                    "bbox_local": [round(float(v), 2) for v in bbox],
+                })
+
+            tile_count += 1
+            _update_progress(task_id, tile_count, total_tiles)
+
+        with _task_lock:
+            _task_store[task_id]["status"] = "completed"
+            _task_store[task_id]["total_trees"] = len(all_detected_trees)
+            _task_store[task_id]["trees"] = all_detected_trees
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+    except Exception as e:
+        with _task_lock:
+            _task_store[task_id]["status"] = "failed"
+            _task_store[task_id]["message"] = str(e)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+
+
+def _update_progress(task_id, tile_count, total_tiles):
+    progress = tile_count / max(total_tiles, 1)
+    with _task_lock:
+        _task_store[task_id]["progress"] = progress
+        _task_store[task_id]["message"] = f"{tile_count}/{total_tiles} tiles"
+
+
+@router.post("/upload-and-interpret", response_model=TaskStatusOut)
+async def upload_and_interpret_tif(file: UploadFile = File(...)):
+    temp_dir = "temp_storage"
+    os.makedirs(temp_dir, exist_ok=True)
+    unique_name = f"{uuid.uuid4().hex}_{file.filename}"
+    temp_file_path = os.path.join(temp_dir, unique_name)
+
+    with open(temp_file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    task_id = uuid.uuid4().hex[:12]
+    with _task_lock:
+        _task_store[task_id] = {
+            "task_id": task_id,
+            "status": "pending",
+            "message": "Task created",
+            "total_trees": 0,
+            "trees": [],
+            "progress": 0.0,
+        }
+
+    asyncio.create_task(asyncio.to_thread(_run_inference_task, task_id, temp_file_path))
+
+    return {
+        "task_id": task_id,
+        "status": "pending",
+        "message": "Task created, processing in background",
+        "total_trees": 0,
+        "trees": [],
+        "progress": 0.0,
+    }
+
+
+@router.get("/upload-and-interpret/{task_id}", response_model=TaskStatusOut)
+async def get_interpret_task(task_id: str):
+    with _task_lock:
+        task = _task_store.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task

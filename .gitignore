@@ -85,3 +85,8 @@ last-chat.txt
 dev.sh
 .trae/
 temp/
+
+# 训练数据集（不在 git 中）
+datasets/
+*.pt
+*.pth

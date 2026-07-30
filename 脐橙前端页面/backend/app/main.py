@@ -116,13 +116,13 @@ async def startup_event():
             async with AsyncSessionLocal() as session:
                 await seed_database(session)
 
-    # Always seed default layers (idempotent)
-    from scripts.seed_layers import seed_default_layers
-    from scripts.seed_hec_ras import seed_hec_ras_scenarios
-    from app.database import AsyncSessionLocal
-    async with AsyncSessionLocal() as session:
-        await seed_default_layers(session)
-        await seed_hec_ras_scenarios(session)
+    # Always seed default layers (idempotent) - disabled for cloud server
+    # from scripts.seed_layers import seed_default_layers
+    # from scripts.seed_hec_ras import seed_hec_ras_scenarios
+    # from app.database import AsyncSessionLocal
+    # async with AsyncSessionLocal() as session:
+    #     await seed_default_layers(session)
+    #     await seed_hec_ras_scenarios(session)
 
     _realtime_task = asyncio.create_task(realtime_push_task())
     print("[startup] Real-time push task started")
@@ -397,8 +397,9 @@ async def api_stress(is_simulated: bool | None = None, session: AsyncSession = D
 origins = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://localhost:5173",  # Vite default port
+    "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "*",
 ]
 
 app.add_middleware(
