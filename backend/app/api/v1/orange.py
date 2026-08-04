@@ -1,6 +1,7 @@
 import os
 import shutil
 import uuid
+import math
 from typing import List, Dict, Any
 
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
@@ -21,6 +22,8 @@ from pyproj import Transformer
 from app.services.sam_service import SamInferenceService
 from app.services.yolo_service import YoloService
 import rasterio
+import cv2
+import numpy as np
 
 router = APIRouter(prefix="/orange", tags=["脐橙三维空间大屏诊断API"])
 
@@ -263,6 +266,41 @@ class TaskStatusOut(BaseModel):
     progress: float = 0.0  # 0.0 ~ 1.0
 
 
+def _calc_growth_fields(mask: np.ndarray, gsd: float, height_m: float = None) -> dict:
+    """Calculate canopy growth fields from SAM segmentation mask and optional height."""
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return {"area_m2": 0, "crown_diameter": 0, "shape_length": 0,
+                "compactness": 0, "volume_m3": None, "height_m": None,
+                "growth_index": None, "fertilizer_level": 0}
+
+    area_px = int(cv2.contourArea(contours[0]))
+    perimeter_px = cv2.arcLength(contours[0], closed=True)
+    if perimeter_px == 0:
+        return {"area_m2": 0, "crown_diameter": 0, "shape_length": 0,
+                "compactness": 0, "volume_m3": None, "height_m": None,
+                "growth_index": None, "fertilizer_level": 0}
+
+    area_m2 = area_px * gsd * gsd
+    shape_length = perimeter_px * gsd
+    crown_diameter = 2.0 * math.sqrt(area_m2 / math.pi)
+    compactness = (4.0 * math.pi * area_px) / (perimeter_px * perimeter_px)
+
+    # Volume: cone approximation (area * height / 3)
+    volume_m3 = (area_m2 * height_m / 3.0) if height_m and height_m > 0 else None
+
+    return {
+        "area_pixels": area_px,
+        "area_m2": round(area_m2, 4),
+        "shape_length": round(shape_length, 4),
+        "crown_diameter": round(crown_diameter, 4),
+        "compactness": round(compactness, 4),
+        "height_m": round(height_m, 2) if height_m and height_m > 0 else None,
+        "volume_m3": round(volume_m3, 4) if volume_m3 else None,
+    }
+
+
 def _run_inference_task(task_id: str, file_path: str):
     with _task_lock:
         _task_store[task_id]["status"] = "processing"
@@ -274,11 +312,26 @@ def _run_inference_task(task_id: str, file_path: str):
         import rasterio as _rio
         with _rio.open(file_path) as _src:
             tif_crs = str(_src.crs)
+            gsd = float(_src.res[0])  # meters per pixel
 
         transformer = Transformer.from_crs(tif_crs, "EPSG:4326", always_xy=True)
+        transformer_utm = Transformer.from_crs("EPSG:4326", "EPSG:32650", always_xy=True)
+
+        batch_id = os.path.splitext(os.path.basename(file_path))[0]
+
+        # Step 0: Predict full canopy height map from RGB
+        _update_progress(task_id, 0, 1, "Predicting canopy height...")
+        try:
+            from app.services.height_service import HeightService
+            from app.services.elevation_service import ElevationService
+            height_map = HeightService.predict_height_map(file_path)
+        except Exception as e:
+            print(f"[Warning] Height prediction failed: {e}, skipping height fields")
+            height_map = None
 
         all_detected_trees = []
         tile_count = 0
+        rio_ds = rasterio.open(file_path)
 
         tiles = list(TifService.slice_tif_generator(file_path))
         total_tiles = len(tiles)
@@ -307,7 +360,7 @@ def _run_inference_task(task_id: str, file_path: str):
             local_trees = SamInferenceService.infer_tile_with_boxes(
                 tile_rgb, valid_mask, boxes, sam_predictor)
 
-            # Step 3: Coordinate conversion + enrich with SAM results
+            # Step 3: Coordinate conversion + post-processing growth fields
             for tree in local_trees:
                 local_cx, local_cy = tree["local_centroid"]
                 global_px = window_x + local_cx
@@ -316,12 +369,21 @@ def _run_inference_task(task_id: str, file_path: str):
                     transform, global_py, global_px, offset="center")
                 lng, lat = transformer.transform(geo_x, geo_y)
                 bbox = tree.get("bbox", (0, 0, 0, 0))
+                tree_h = float(np.median(height_map[max(0,int(global_py)-2):min(height_map.shape[0],int(global_py)+3), max(0,int(global_px)-2):min(height_map.shape[1],int(global_px)+3)][height_map[max(0,int(global_py)-2):min(height_map.shape[0],int(global_py)+3), max(0,int(global_px)-2):min(height_map.shape[1],int(global_px)+3)] > 0])) if height_map is not None and 0 <= int(global_py) < height_map.shape[0] and 0 <= int(global_px) < height_map.shape[1] else None
+                growth = _calc_growth_fields(tree["segmentation_mask"], gsd, tree_h)
+                utm_x, utm_y = transformer_utm.transform(lng, lat)
+                slope_info = ElevationService.get_slope_aspect(lat, lng, utm_x, utm_y); band_val = tile_rgb[int(local_cy), int(local_cx)].tolist(); raw_val = float(rio_ds.read(1, window=((int(global_py),int(global_py)+1), (int(global_px),int(global_px)+1)))[0,0]) if 0 <= int(global_py) < rio_ds.shape[0] and 0 <= int(global_px) < rio_ds.shape[1] else None if 0 <= int(local_cy) < tile_rgb.shape[0] and 0 <= int(local_cx) < tile_rgb.shape[1] else None
                 all_detected_trees.append({
+                    "batch_id": batch_id,
                     "lng": round(lng, 8),
                     "lat": round(lat, 8),
-                    "area_pixels": tree["area_pixels"],
+                    "utm_x": round(utm_x, 4),
+                    "utm_y": round(utm_y, 4),
                     "iou_score": round(tree.get("iou_score", 0), 4),
                     "bbox_local": [round(float(v), 2) for v in bbox],
+                    "shape_area": growth.get("area_m2", 0),
+                    "band_value": band_val, "value": raw_val, **slope_info,
+                    **growth,
                 })
 
             tile_count += 1
@@ -332,6 +394,7 @@ def _run_inference_task(task_id: str, file_path: str):
             _task_store[task_id]["total_trees"] = len(all_detected_trees)
             _task_store[task_id]["trees"] = all_detected_trees
 
+        rio_ds.close()
         if os.path.exists(file_path):
             os.remove(file_path)
 
@@ -339,15 +402,16 @@ def _run_inference_task(task_id: str, file_path: str):
         with _task_lock:
             _task_store[task_id]["status"] = "failed"
             _task_store[task_id]["message"] = str(e)
+        rio_ds.close()
         if os.path.exists(file_path):
             os.remove(file_path)
 
 
-def _update_progress(task_id, tile_count, total_tiles):
+def _update_progress(task_id, tile_count, total_tiles, msg: str = None):
     progress = tile_count / max(total_tiles, 1)
     with _task_lock:
         _task_store[task_id]["progress"] = progress
-        _task_store[task_id]["message"] = f"{tile_count}/{total_tiles} tiles"
+        _task_store[task_id]["message"] = msg if msg else f"{tile_count}/{total_tiles} tiles"
 
 
 @router.post("/upload-and-interpret", response_model=TaskStatusOut)
