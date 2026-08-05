@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.database import get_session
 from app.models.orange import OrangeTree
 from app.schemas.orange import (
@@ -290,6 +291,22 @@ def _calc_growth_fields(mask: np.ndarray, gsd: float, height_m: float = None) ->
     # Volume: cone approximation (area * height / 3)
     volume_m3 = (area_m2 * height_m / 3.0) if height_m and height_m > 0 else None
 
+    # Growth index: composite 0-1 score from compactness + height-to-crown ratio
+    if height_m and height_m > 0 and crown_diameter > 0:
+        hc_ratio = height_m / crown_diameter
+        hc_score = max(0.0, 1.0 - abs(hc_ratio - 1.0))
+        growth_index = round(compactness * 0.5 + hc_score * 0.5, 4)
+    else:
+        growth_index = round(compactness, 4)
+
+    # Fertilizer recommendation based on growth index
+    if growth_index >= 0.7:
+        fertilizer_level = 1   # light
+    elif growth_index >= 0.4:
+        fertilizer_level = 2   # medium
+    else:
+        fertilizer_level = 3   # heavy
+
     return {
         "area_pixels": area_px,
         "area_m2": round(area_m2, 4),
@@ -298,7 +315,47 @@ def _calc_growth_fields(mask: np.ndarray, gsd: float, height_m: float = None) ->
         "compactness": round(compactness, 4),
         "height_m": round(height_m, 2) if height_m and height_m > 0 else None,
         "volume_m3": round(volume_m3, 4) if volume_m3 else None,
+        "growth_index": growth_index,
+        "fertilizer_level": fertilizer_level,
     }
+
+
+def _persist_trees_sync(trees_data: list, batch_id: str):
+    """Persist detected trees to DB via sync connection (runs in background thread)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    if not trees_data:
+        return
+
+    settings = get_settings()
+    engine = create_engine(settings.database_url_sync, echo=False)
+    try:
+        with Session(engine) as session:
+            for tree in trees_data:
+                session.add(OrangeTree(
+                    batch_id=batch_id,
+                    geom=f"POINT({tree['utm_x']} {tree['utm_y']})",
+                    confidence=tree.get("iou_score"),
+                    compactness=tree.get("compactness"),
+                    shape_length=tree.get("shape_length"),
+                    shape_area=tree.get("shape_area"),
+                    value_field=tree.get("value"),
+                    area_m2=tree.get("area_m2"),
+                    height_m=tree.get("height_m"),
+                    crown_diameter=tree.get("crown_diameter"),
+                    volume_m3=tree.get("volume_m3"),
+                    growth_index=tree.get("growth_index"),
+                    slope_degree=tree.get("slope_degree"),
+                    aspect=tree.get("aspect"),
+                    fertilizer_level=tree.get("fertilizer_level", 0),
+                ))
+            session.commit()
+            print(f"[Persist] {len(trees_data)} trees saved to DB (batch: {batch_id})")
+    except Exception as e:
+        print(f"[Persist] Failed to save trees: {e}")
+    finally:
+        engine.dispose()
 
 
 def _run_inference_task(task_id: str, file_path: str):
@@ -388,6 +445,9 @@ def _run_inference_task(task_id: str, file_path: str):
 
             tile_count += 1
             _update_progress(task_id, tile_count, total_tiles)
+
+        # Persist detected trees to database for spatial-diagnose
+        _persist_trees_sync(all_detected_trees, batch_id)
 
         with _task_lock:
             _task_store[task_id]["status"] = "completed"
