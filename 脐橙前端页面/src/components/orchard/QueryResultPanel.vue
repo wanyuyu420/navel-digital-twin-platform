@@ -20,34 +20,20 @@
       <!-- 统计概览 -->
       <div class="stats-overview" v-if="orchardStore.tsomQueryResult.statistics">
         <div class="stat-item">
-          <span class="stat-value">{{ orchardStore.tsomQueryResult.statistics.averageNdvi.toFixed(2) }}</span>
-          <span class="stat-label">平均NDVI</span>
-        </div>
-        <div class="stat-item">
-          <span class="stat-value">{{ orchardStore.tsomQueryResult.statistics.averageLai.toFixed(1) }}</span>
-          <span class="stat-label">平均LAI</span>
-        </div>
-        <div class="stat-item">
           <span class="stat-value">{{ orchardStore.tsomQueryResult.statistics.averageCanopyHeight.toFixed(1) }}m</span>
           <span class="stat-label">平均冠高</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value">{{ orchardStore.tsomQueryResult.statistics.averageCanopyVolume.toFixed(1) }}m³</span>
+          <span class="stat-label">平均体积</span>
         </div>
         <div class="stat-item">
           <span class="stat-value healthy">{{ orchardStore.tsomQueryResult.statistics.healthyCount }}</span>
           <span class="stat-label">健康</span>
         </div>
-      </div>
-
-      <!-- 品种分布 -->
-      <div class="variety-dist" v-if="orchardStore.tsomQueryResult.statistics?.varietyDistribution">
-        <div class="section-label">品种分布</div>
-        <div class="variety-tags">
-          <span
-            v-for="(count, variety) in orchardStore.tsomQueryResult.statistics.varietyDistribution"
-            :key="variety"
-            class="variety-tag"
-          >
-            {{ varietyName(variety) }}: {{ count }}
-          </span>
+        <div class="stat-item">
+          <span class="stat-value">{{ orchardStore.tsomQueryResult.totalTrees }}</span>
+          <span class="stat-label">总数</span>
         </div>
       </div>
 
@@ -64,9 +50,7 @@
           <div class="poi-info">
             <div class="poi-name">{{ poi.name || `果树 #${poi.id.slice(0, 8)}` }}</div>
             <div class="poi-meta">
-              <span>{{ poi.variety }}</span>
-              <span>冠高 {{ poi.canopyHeight }}m</span>
-              <span>NDVI {{ poi.ndvi.toFixed(2) }}</span>
+                <span>冠高 {{ poi.canopyHeight }}m</span>
             </div>
           </div>
           <i class="fa-solid fa-chevron-right poi-arrow"></i>
@@ -81,16 +65,6 @@ import { useOrchardStore } from '@/stores/orchard'
 import type { FruitTreePoi } from '@/types/orchard'
 
 const orchardStore = useOrchardStore()
-
-function varietyName(v: string): string {
-  const map: Record<string, string> = {
-    newhall: '纽荷尔',
-    'gannan-early': '赣南早',
-    fukumoto: '福本',
-    'cara-cara': '红肉',
-  }
-  return map[v] || v
-}
 
 function onPoiClick(poi: FruitTreePoi) {
   // 4点击结果窗口，弹出更详细内容的窗口

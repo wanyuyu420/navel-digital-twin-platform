@@ -7,11 +7,11 @@ export interface ViewConfig {
   roll: number
 }
 
-/** 果园3D模型中心坐标 (CityEngine UTM zone 50N → WGS84) */
+/** 赣南脐橙核心产区坐标（与模型位置对齐） */
 export const defaultView: ViewConfig = {
-  lon: 116.5,
-  lat: 27.13,
-  height: 3000,
+  lon: 116.4973,
+  lat: 27.1322,
+  height: 2000,
   heading: 0,
   pitch: -60,
   roll: 0,

@@ -65,7 +65,7 @@ export class PolygonGraphic extends BaseGraphic {
   constructor(viewer: Cesium.Viewer, options: PolygonGraphicOptions = {}) {
     super(viewer, { ...options, type: 'polygon' })
     this.showAreaLabel = options.showAreaLabel ?? false // 默认不显示面积标签
-    this.heightReference = options.heightReference ?? Cesium.HeightReference.NONE
+    this.heightReference = options.heightReference ?? Cesium.HeightReference.CLAMP_TO_GROUND
     this.centerIcon = options.centerIcon
   }
 
@@ -114,6 +114,7 @@ export class PolygonGraphic extends BaseGraphic {
       polygon: {
         hierarchy: new Cesium.PolygonHierarchy(this.positions),
         material: Cesium.Color.TRANSPARENT, // 完全透明填充
+        classificationType: Cesium.ClassificationType.BOTH_3D_TILE, // 贴地形/3D Tile表面
         outline: false,
       },
     })
@@ -131,10 +132,11 @@ export class PolygonGraphic extends BaseGraphic {
     // 闭合多边形：最后一个点连回第一个点
     const outlinePositions = [...this.positions, this.positions[0]]
 
-    // 使用 Entity polyline 创建边框
+    // 使用 Entity polyline 创建边框（clampToGround 使边框贴在地形/3D模型表面）
     this.outlineEntity = this.viewer.entities.add({
       polyline: {
         positions: outlinePositions,
+        clampToGround: true,
         width: this.style.strokeWidth || 2,
         material: Cesium.Color.fromCssColorString(this.style.strokeColor || '#000000'),
       },

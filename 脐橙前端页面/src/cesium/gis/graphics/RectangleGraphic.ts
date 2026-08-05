@@ -75,7 +75,7 @@ export class RectangleGraphic extends BaseGraphic {
     super(viewer, { ...options, type: 'rectangle' })
     this.showDimensionsLabel = options.showDimensionsLabel ?? false
     this.showAreaLabel = options.showAreaLabel ?? false
-    this.heightReference = options.heightReference ?? Cesium.HeightReference.NONE
+    this.heightReference = options.heightReference ?? Cesium.HeightReference.CLAMP_TO_GROUND
   }
 
   /**
@@ -156,20 +156,20 @@ export class RectangleGraphic extends BaseGraphic {
     const southDeg = Cesium.Math.toDegrees(this.rectangleBounds.south)
     const northDeg = Cesium.Math.toDegrees(this.rectangleBounds.north)
 
-    // 使用拾取高度让矩形边框贴合3D模型表面
-    const h = this.rectHeight || 0
-    const nw = Cesium.Cartesian3.fromDegrees(westDeg, northDeg, h)
-    const ne = Cesium.Cartesian3.fromDegrees(eastDeg, northDeg, h)
-    const se = Cesium.Cartesian3.fromDegrees(eastDeg, southDeg, h)
-    const sw = Cesium.Cartesian3.fromDegrees(westDeg, southDeg, h)
+    // 使用纯经纬度（不带高程），配合 clampToGround 使边框贴地
+    const nw = Cesium.Cartesian3.fromDegrees(westDeg, northDeg)
+    const ne = Cesium.Cartesian3.fromDegrees(eastDeg, northDeg)
+    const se = Cesium.Cartesian3.fromDegrees(eastDeg, southDeg)
+    const sw = Cesium.Cartesian3.fromDegrees(westDeg, southDeg)
 
     // 边框位置（闭合）
     const outlinePositions = [nw, ne, se, sw, nw]
 
-    // 使用 Entity polyline 创建边框
+    // 使用 Entity polyline 创建边框（clampToGround 使边框贴在地形/3D模型表面）
     this.outlineEntity = this.viewer.entities.add({
       polyline: {
         positions: outlinePositions,
+        clampToGround: true,
         width: this.style.strokeWidth || 2,
         material: Cesium.Color.fromCssColorString(this.style.strokeColor || '#000000'),
       },

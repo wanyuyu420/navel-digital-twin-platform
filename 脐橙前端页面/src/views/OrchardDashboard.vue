@@ -9,17 +9,8 @@
           <i class="fa-solid fa-tree" style="color: #4ade80"></i>
         </div>
         <div class="status-info">
-          <div class="status-value">12,580</div>
+          <div class="status-value">{{ dashboardStats.treesLabel }}</div>
           <div class="status-label">果树总数</div>
-        </div>
-      </div>
-      <div class="status-card">
-        <div class="status-icon" style="background: rgba(34, 211, 238, 0.15)">
-          <i class="fa-solid fa-chart-simple" style="color: #22d3ee"></i>
-        </div>
-        <div class="status-info">
-          <div class="status-value">0.72</div>
-          <div class="status-label">平均NDVI</div>
         </div>
       </div>
       <div class="status-card">
@@ -27,7 +18,7 @@
           <i class="fa-solid fa-wheat-awn" style="color: #fb923c"></i>
         </div>
         <div class="status-info">
-          <div class="status-value">2,350亩</div>
+          <div class="status-value">{{ dashboardStats.areaLabel }}</div>
           <div class="status-label">种植面积</div>
         </div>
       </div>
@@ -43,13 +34,56 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useOrchardStore } from '@/stores/orchard'
+import { apiClient } from '@/api/client'
 
 const orchardStore = useOrchardStore()
 
+interface DashboardStats {
+  totalTrees: number
+  totalArea: number
+  timestamp: string
+}
+
+const dashboardStats = ref<{ treesLabel: string; areaLabel: string }>({
+  treesLabel: '...',
+  areaLabel: '...亩',
+})
+
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function formatNumber(n: number): string {
+  return n.toLocaleString('zh-CN', { maximumFractionDigits: 0 })
+}
+
+function formatArea(n: number): string {
+  return n.toFixed(1) + '亩'
+}
+
+async function fetchDashboardStats() {
+  try {
+    const res = await apiClient.get<DashboardStats>('/orchard/dashboard-stats')
+    const data = res.data
+    dashboardStats.value = {
+      treesLabel: formatNumber(Math.round(data.totalTrees)),
+      areaLabel: formatArea(data.totalArea),
+    }
+  } catch (err) {
+    console.error('[OrchardDashboard] Failed to fetch stats:', err)
+  }
+}
+
 onMounted(() => {
-  orchardStore.fetchGeoServerLayers()
+  fetchDashboardStats()
+  pollTimer = setInterval(fetchDashboardStats, 10000)
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 })
 </script>
 

@@ -9,6 +9,7 @@ import { useCesiumStore } from '@/stores/cesium'
 import { useAppStore } from '@/stores/app'
 import { GController } from '@/utils/ctrlCesium/Controller'
 import { getBaseMapConfig, getBaseMapImageryList } from '@/mock/baseMapData'
+import { addGeotiffBasemap } from '@/utils/geotiffBasemap'
 
 declare const Cesium: any
 
@@ -37,7 +38,6 @@ onMounted(async () => {
 	viewer.scene.globe.enableLighting = true
 
 	// Set initial view directly (no fly animation for faster startup)
-	// Set initial view directly (no fly animation for faster startup)
 	const { lon, lat, height, heading, pitch, roll } = cesiumStore.defaultView
 	viewer.camera.setView({
 		destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
@@ -47,6 +47,9 @@ onMounted(async () => {
 			roll: Cesium.Math.toRadians(roll),
 		},
 	})
+
+	// Load GeoTIFF base map (async, non-blocking)
+	addGeotiffBasemap(viewer)
 })
 
 onUnmounted(() => {

@@ -5,28 +5,18 @@ export interface FruitTreePoi {
   longitude: number
   latitude: number
   altitude?: number
-  /** 品种 */
-  variety: string
-  /** 树龄 */
-  treeAge: number
   /** 冠层高度 (m) */
   canopyHeight: number
   /** 冠层直径 (m) */
   canopyDiameter: number
   /** 冠层体积 (m³) */
   canopyVolume: number
-  /** 叶面积指数 */
-  leafAreaIndex: number
-  /** NDVI值 */
-  ndvi: number
   /** 健康状态: healthy/warning/critical */
   healthStatus: 'healthy' | 'warning' | 'critical'
   /** 所属园区ID */
   orchardId: string
   /** 所属园区名称 */
   orchardName: string
-  /** 最后更新时间 */
-  updatedAt: string
 }
 
 /** TSOM查询参数 */
@@ -60,14 +50,11 @@ export interface TsomQueryResult {
 /** 园区统计数据 */
 export interface OrchardStatistics {
   totalArea: number
-  averageNdvi: number
-  averageLai: number
   averageCanopyHeight: number
   averageCanopyVolume: number
   healthyCount: number
   warningCount: number
   criticalCount: number
-  varietyDistribution: Record<string, number>
 }
 
 /** 施肥方案 */
@@ -185,3 +172,39 @@ export interface ModuleMenuItem {
 
 /** 查询窗口层级 */
 export type QueryLevel = 'menu' | 'query' | 'result' | 'detail'
+
+// ---- 冠层图表统计 ----
+
+/** 图表分桶/分类项 */
+export interface ChartDistributionItem {
+  name: string
+  value: number
+}
+
+/** 趋势数据点 */
+export interface ChartTrendPoint {
+  time: string
+  value: number
+}
+
+/** 单个指标的图表数据 */
+export interface ChartMetricData {
+  key: 'canopyVolume' | 'canopyHeight' | 'canopyArea'
+  label: string
+  unit: string
+  avg: number
+  min_val: number
+  max_val: number
+  distribution: ChartDistributionItem[]
+  pieData: ChartDistributionItem[]
+  trend: ChartTrendPoint[]
+}
+
+/** 图表统计接口响应 */
+export interface ChartStatistics {
+  metrics: ChartMetricData[]
+  timestamp: string
+}
+
+/** 图表视图类型 */
+export type ChartViewType = 'bar' | 'pie' | 'line'

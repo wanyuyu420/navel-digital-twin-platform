@@ -12,6 +12,7 @@ import type {
   GeoServerLayer,
   QueryLevel,
   ModuleMenuItem,
+  ChartStatistics,
 } from '@/types/orchard'
 import { DEFAULT_RENDER_PARAMS } from '@/types/orchard'
 import { useGISStore } from '@/stores/gis'
@@ -144,7 +145,11 @@ export const useOrchardStore = defineStore('orchard', () => {
     showResultPanel.value = true
   }
 
-  function openDetailPanel(_poi: FruitTreePoi) {
+  // ---- 果树详情弹窗 ----
+  const selectedPoiDetail = ref<FruitTreePoi | null>(null)
+
+  function openDetailPanel(poi: FruitTreePoi) {
+    selectedPoiDetail.value = poi
     queryLevel.value = 'detail'
     showDetailPanel.value = true
   }
@@ -154,6 +159,7 @@ export const useOrchardStore = defineStore('orchard', () => {
     showResultPanel.value = false
     showDetailPanel.value = false
     queryLevel.value = 'menu'
+    // 不清理 selectedPoiDetail，切回来还能看
   }
 
   function goBackQueryLevel() {
@@ -180,6 +186,21 @@ export const useOrchardStore = defineStore('orchard', () => {
       return res.data
     } catch (err) {
       console.error('TSOM query failed:', err)
+      throw err
+    }
+  }
+
+  // ---- 精细查询（查全部树，不限制空间范围） ----
+  async function executeFilterQuery(params: TsomQueryParams) {
+    try {
+      const res = await orchardApi.queryTreesByFilter(params)
+      tsomQueryResult.value = res.data
+      selectedPois.value = res.data.pois
+      queryLevel.value = 'result'
+      showResultPanel.value = true
+      return res.data
+    } catch (err) {
+      console.error('Filter query failed:', err)
       throw err
     }
   }
@@ -330,11 +351,31 @@ export const useOrchardStore = defineStore('orchard', () => {
     }
   }
 
+  // ---- 冠层图表统计 ----
+  const showChartDialog = ref(false)
+  const chartData = ref<ChartStatistics | null>(null)
+  const chartLoading = ref(false)
+  const chartError = ref<string | null>(null)
+
+  async function fetchChartData() {
+    chartLoading.value = true
+    chartError.value = null
+    try {
+      const res = await orchardApi.getChartStatistics()
+      chartData.value = res.data as ChartStatistics
+    } catch (err: any) {
+      chartError.value = err?.message || '获取图表数据失败'
+      console.error('[orchardStore] fetchChartData failed:', err)
+    } finally {
+      chartLoading.value = false
+    }
+  }
+
   // ---- 初始化 ----
   async function init() {
     await Promise.all([
       fetchUploadedFiles(),
-      fetchGeoServerLayers(),
+      // fetchGeoServerLayers removed,
       fetchAnalysisResults(),
     ])
   }
@@ -349,6 +390,7 @@ export const useOrchardStore = defineStore('orchard', () => {
     showDetailPanel,
     selectedPois,
     tsomQueryResult,
+    selectedPoiDetail,
     orchardStatistics,
     selectionRange,
     renderParams,
@@ -382,6 +424,13 @@ export const useOrchardStore = defineStore('orchard', () => {
     activeAnalysisResult,
     activeFertilizationPlan,
     activeUploadedFile,
+    // chart state
+    showChartDialog,
+    chartData,
+    chartLoading,
+    chartError,
+    // chart actions
+    fetchChartData,
     // actions
     openQueryPanel,
     openResultPanel,
@@ -389,6 +438,7 @@ export const useOrchardStore = defineStore('orchard', () => {
     closeAllPanels,
     goBackQueryLevel,
     executeTsomQuery,
+    executeFilterQuery,
     setSelectionRange,
     clearSelection,
     updateRenderParams,

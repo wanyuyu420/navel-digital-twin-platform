@@ -1,14 +1,9 @@
 /**
  * Basemap configuration data
- * Earth imagery basemaps have been removed — only 3D model layers (GLB/OSGB/BIM) are used.
- * MockMapImageryList remains empty; Tianditu config is kept as reference.
+ * 天地图底图
  */
 
 import type { MapImageryConfig, BaseMapConfig } from '@/utils/ctrlCesium/Controller'
-
-// 天地图 API Key - 请替换为你自己的 Key
-// 申请地址: https://console.tianditu.gov.cn/
-const TIANDITU_KEY = import.meta.env.VITE_TIANDITU_KEY || 'YOUR_TIANDITU_KEY'
 
 // Viewer configuration
 export const MockMapConfig: { data: { name: string; value: string }[] } = {
@@ -26,12 +21,12 @@ export const MockMapConfig: { data: { name: string; value: string }[] } = {
   ],
 }
 
-// Initial view settings (Xinjiang - Urumqi area)
+// Initial view settings (赣州 - 脐橙果园)
 export const MockMapView = {
   data: [
-    { name: 'lat', value: '43.82' },
-    { name: 'lng', value: '87.57' },
-    { name: 'height', value: '50000' },
+    { name: 'lat', value: '27.13' },
+    { name: 'lng', value: '116.5' },
+    { name: 'height', value: '2000' },
     { name: 'direction_x', value: '0' },
     { name: 'direction_y', value: '-0.9' },
     { name: 'direction_z', value: '-0.1' },
@@ -44,74 +39,27 @@ export const MockMapView = {
   ],
 }
 
-// Default basemap: empty — no earth imagery tiles loaded
-// The 3D model layers (orchard GLB, OSGB tiles, BIM) serve as the primary basemap.
-// Globe base color is dark to blend with the app background.
+// Empty — 无地球影像底图，GLB 模型作为主要内容
 export const MockMapImageryList: { data: MapImageryConfig[] } = {
   data: [],
 }
 
-// /**
-//  * 以下配置为地球影像底图（天地图），现已禁用
-//  * 项目只使用3D模型底图（GLB/OSGB/BIM）
-//  */
-// export const TiandituConfig = {
-//   vec: {
-//     type: 'UrlTemplateImageryProvider',
-//     classConfig: {
-//       url: `https://t{s}.tianditu.gov.cn/DataServer?T=vec_w&x={x}&y={y}&l={z}&tk=${TIANDITU_KEY}`,
-//       subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'],
-//       maximumLevel: 18,
-//     },
-//     interfaceConfig: {},
-//     offset: '0,0',
-//     invertswitch: false,
-//     filterRGB: '#ffffff',
-//   },
-//   cva: {
-//     type: 'UrlTemplateImageryProvider',
-//     classConfig: {
-//       url: `https://t{s}.tianditu.gov.cn/DataServer?T=cva_w&x={x}&y={y}&l={z}&tk=${TIANDITU_KEY}`,
-//       subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'],
-//       maximumLevel: 18,
-//     },
-//     interfaceConfig: {},
-//     offset: '0,0',
-//     invertswitch: false,
-//     filterRGB: '#ffffff',
-//   },
-//   img: {
-//     type: 'UrlTemplateImageryProvider',
-//     classConfig: {
-//       url: `https://t{s}.tianditu.gov.cn/DataServer?T=img_w&x={x}&y={y}&l={z}&tk=${TIANDITU_KEY}`,
-//       subdomains: ['0', '1', '2', '3', '4', '5', '6', '7'],
-//       maximumLevel: 18,
-//     },
-//     interfaceConfig: {},
-//     offset: '0,0',
-//     invertswitch: false,
-//     filterRGB: '#ffffff',
-//   },
-// }
+// 底图样式预设
+export const baseInkStyle = {
+  saturation: 0.0,
+  brightness: 0.55,
+  contrast: 1.6,
+  gamma: 0.35,
+  hue: 1.0,
+}
 
-// /**
-//  * 底图样式预设（已禁用 - 无地球底图）
-//  */
-// export const baseInkStyle = {
-//   saturation: 0.0,
-//   brightness: 0.55,
-//   contrast: 1.6,
-//   gamma: 0.35,
-//   hue: 1.0,
-// }
-
-// export const baseColorStyle = {
-//   saturation: 1.0,
-//   brightness: 0.95,
-//   contrast: 1.0,
-//   gamma: 1.0,
-//   hue: 0.0,
-// }
+export const baseColorStyle = {
+  saturation: 1.0,
+  brightness: 0.95,
+  contrast: 1.0,
+  gamma: 1.0,
+  hue: 0.0,
+}
 
 // Helper to convert MockMapConfig to BaseMapConfig
 export function getBaseMapConfig(): BaseMapConfig {

@@ -840,6 +840,12 @@ function activateTool(toolType: DrawToolType) {
 						coordinates: coords,
 						featureId: feature.id,
 					})
+
+					// 将绘制图形坐标同步到 selectionRange，供查询面板使用
+					orchardStore.setSelectionRange({
+						type: geomType,
+						coordinates: coords,
+					})
 				}
 
 				// For MVP: Keep tool active for easier use (user can click away to deactivate)

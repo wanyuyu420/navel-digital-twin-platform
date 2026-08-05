@@ -20,6 +20,11 @@ export function queryTsom(params: TsomQueryParams) {
   return apiClient.post<TsomQueryResult>('/orchard/tsom/query', params)
 }
 
+/** 精细查询 - 查询所有符合条件的果树（不需要绘制范围） */
+export function queryTreesByFilter(params: TsomQueryParams) {
+  return apiClient.post<TsomQueryResult>('/orchard/trees/filter', params)
+}
+
 /** 获取园区统计数据 */
 export function getOrchardStatistics(orchardId: string) {
   return apiClient.get(`/orchard/${orchardId}/statistics`)
@@ -108,4 +113,9 @@ export function downloadAnalysisFile(fileId: string) {
 /** 获取上传文件的子级分析文件 */
 export function getChildFiles(parentId: string) {
   return apiClient.get<UploadedFile[]>(`/upload/files/${parentId}/children`)
+}
+
+/** 获取冠层图表统计数据 */
+export function getChartStatistics() {
+  return apiClient.get('/orchard/chart-data')
 }

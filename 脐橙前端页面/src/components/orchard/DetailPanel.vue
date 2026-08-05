@@ -1,6 +1,6 @@
 <template>
-  <transition name="slide-right">
-    <!-- 4详细内容窗口 -->
+  <transition name="fade">
+    <!-- 4详细内容窗口（居中弹窗） -->
     <div v-if="orchardStore.showDetailPanel && detailPoi" class="detail-panel glass-panel">
       <div class="panel-header">
         <div class="header-left">
@@ -9,7 +9,7 @@
           </button>
           <span class="panel-title">果树详情</span>
         </div>
-        <button class="close-btn" @click="orchardStore.closeAllPanels">
+        <button class="close-btn" @click="orchardStore.goBackQueryLevel">
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
@@ -27,14 +27,8 @@
               <span class="info-label">名称</span>
               <span class="info-value">{{ detailPoi.name || '--' }}</span>
             </div>
-            <div class="info-item">
-              <span class="info-label">品种</span>
-              <span class="info-value">{{ detailPoi.variety }}</span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">树龄</span>
-              <span class="info-value">{{ detailPoi.treeAge }} 年</span>
-            </div>
+
+
             <div class="info-item">
               <span class="info-label">所属园区</span>
               <span class="info-value">{{ detailPoi.orchardName }}</span>
@@ -62,10 +56,7 @@
               <div class="param-value">{{ detailPoi.canopyVolume.toFixed(2) }}m³</div>
               <div class="param-label">冠层体积</div>
             </div>
-            <div class="param-card">
-              <div class="param-value">{{ detailPoi.leafAreaIndex.toFixed(2) }}</div>
-              <div class="param-label">叶面积指数</div>
-            </div>
+
           </div>
         </div>
 
@@ -77,24 +68,12 @@
               <i class="fa-solid" :class="healthIcon"></i>
               <span>{{ healthLabel }}</span>
             </div>
-            <div class="ndvi-bar-container">
-              <div class="ndvi-bar-label">NDVI</div>
-              <div class="ndvi-bar">
-                <div class="ndvi-fill" :style="{ width: (detailPoi.ndvi * 100) + '%' }"></div>
-              </div>
-              <span class="ndvi-value">{{ detailPoi.ndvi.toFixed(3) }}</span>
+            <div class="health-info">
+              <span>健康指数: {{ detailPoi.healthStatus === 'healthy' ? '健康' : detailPoi.healthStatus === 'warning' ? '预警' : '严重' }}</span>
             </div>
           </div>
         </div>
 
-        <!-- 更新信息 -->
-        <div class="detail-section">
-          <div class="section-label">数据信息</div>
-          <div class="info-item">
-            <span class="info-label">最后更新</span>
-            <span class="info-value">{{ formatDate(detailPoi.updatedAt) }}</span>
-          </div>
-        </div>
       </div>
 
       <!-- 操作按钮 -->
@@ -122,8 +101,7 @@ const cesiumStore = useCesiumStore()
 
 const detailPoi = computed(() => {
   if (orchardStore.queryLevel === 'detail') {
-    // 获取当前选中的POI (存储于选中列表的第一个或通过额外状态)
-    return orchardStore.selectedPois[0] || null
+    return orchardStore.selectedPoiDetail
   }
   return null
 })
@@ -176,10 +154,11 @@ function viewAnalysis() {
 <style scoped lang="scss">
 .detail-panel {
   position: absolute;
-  right: 24px;
-  top: 80px;
-  width: 440px;
-  max-height: calc(100vh - 120px);
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 560px;
+  max-height: 80vh;
   z-index: $z-layer-7;
   pointer-events: auto;
   display: flex;
@@ -371,13 +350,12 @@ function viewAnalysis() {
   gap: 10px;
 }
 
-.slide-right-enter-active,
-.slide-right-leave-active {
-  transition: all 0.3s $ease-out;
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
 }
-.slide-right-enter-from,
-.slide-right-leave-to {
+.fade-enter-from,
+.fade-leave-to {
   opacity: 0;
-  transform: translateX(40px);
 }
 </style>

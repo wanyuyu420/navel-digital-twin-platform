@@ -19,8 +19,6 @@
           <label>查询类型</label>
           <el-select v-model="queryType" placeholder="选择查询类型" style="width: 100%">
             <el-option label="果树POI查询" value="poi" />
-            <el-option label="冠层参数查询" value="canopy" />
-            <el-option label="NDVI指数查询" value="ndvi" />
             <el-option label="健康状态查询" value="health" />
           </el-select>
         </div>
@@ -35,10 +33,9 @@
             style="width: 100%"
             collapse-tags
           >
-            <el-option label="纽荷尔脐橙" value="newhall" />
-            <el-option label="赣南早" value="gannan-early" />
-            <el-option label="福本脐橙" value="fukumoto" />
-            <el-option label="红肉脐橙" value="cara-cara" />
+            <el-option label="纽荷尔脐橙" value="纽荷尔脐橙" />
+            <el-option label="朋娜脐橙" value="朋娜脐橙" />
+            <el-option label="奈维林娜" value="奈维林娜" />
           </el-select>
         </div>
 
@@ -55,30 +52,6 @@
           />
         </div>
 
-        <!-- 冠层参数范围 -->
-        <div class="form-group" v-if="queryType === 'canopy'">
-          <label>冠层高度范围 (m)</label>
-          <el-slider
-            v-model="canopyHeightRange"
-            range
-            :min="0"
-            :max="10"
-            :step="0.1"
-            :marks="{ 0: '0', 2.5: '2.5', 5: '5', 7.5: '7.5', 10: '10' }"
-          />
-        </div>
-
-        <div class="form-group" v-if="queryType === 'ndvi'">
-          <label>NDVI 指数范围</label>
-          <el-slider
-            v-model="ndviRange"
-            range
-            :min="0"
-            :max="1"
-            :step="0.05"
-            :marks="{ 0: '0', 0.5: '0.5', 1: '1' }"
-          />
-        </div>
 
         <!-- 健康状态筛选 -->
         <div class="form-group" v-if="queryType === 'health'">
@@ -115,16 +88,12 @@ const querying = ref(false)
 const queryType = ref('poi')
 const selectedVarieties = ref<string[]>([])
 const dateRange = ref<[Date, Date] | null>(null)
-const canopyHeightRange = ref<[number, number]>([0.5, 5])
-const ndviRange = ref<[number, number]>([0.2, 0.9])
 const healthFilter = ref<string[]>(['healthy', 'warning', 'critical'])
 
 async function executeQuery() {
   querying.value = true
   try {
     const params: TsomQueryParams = {
-      rangeType: orchardStore.selectionRange?.type || 'rectangle',
-      coordinates: orchardStore.selectionRange?.coordinates || [],
       varieties: selectedVarieties.value.length > 0 ? selectedVarieties.value : undefined,
       healthStatuses: healthFilter.value.length > 0 ? healthFilter.value : undefined,
     }
@@ -132,8 +101,11 @@ async function executeQuery() {
       params.startDate = dateRange.value[0].toISOString()
       params.endDate = dateRange.value[1].toISOString()
     }
-    // 弹出查询结果窗口
-    await orchardStore.executeTsomQuery(params)
+
+    // 菜单精细查询永远查全部树，不按空间范围过滤
+    await orchardStore.executeFilterQuery(params)
+    // 查询成功后关闭查询面板，避免与结果面板重叠
+    orchardStore.showQueryPanel = false
   } catch {
     ElMessage.error('查询失败，请重试')
   } finally {

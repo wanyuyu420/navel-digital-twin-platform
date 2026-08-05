@@ -4,7 +4,7 @@
     <CesiumViewer />
 
     <!-- Orchard 3D Base Model (replaces online tile imagery) -->
-    <OrchardBaseModel />
+    <!-- <OrchardBaseModel /> -->
 
     <!-- Measure Layer (Persistent across pages) -->
     <MeasureLayer />
@@ -19,7 +19,7 @@
 
 <script setup lang="ts">
 import CesiumViewer from '@/components/cesium/CesiumViewer.vue'
-import OrchardBaseModel from '@/components/cesium/OrchardBaseModel.vue'
+// import OrchardBaseModel from '@/components/cesium/OrchardBaseModel.vue'
 import MeasureLayer from '@/components/cesium/MeasureLayer.vue'
 import DrawLayer from '@/components/cesium/DrawLayer.vue'
 import OrchardMainLayout from '@/layout/OrchardMainLayout.vue'

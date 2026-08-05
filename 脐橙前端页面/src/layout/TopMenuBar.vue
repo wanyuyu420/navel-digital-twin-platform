@@ -95,6 +95,11 @@
           <i class="fa-solid fa-palette"></i>
         </button>
       </el-tooltip>
+      <el-tooltip content="图表统计" placement="bottom">
+        <button class="action-btn" @click="orchardStore.showChartDialog = !orchardStore.showChartDialog">
+          <i class="fa-solid fa-chart-simple"></i>
+        </button>
+      </el-tooltip>
       <el-tooltip content="回到初始视角" placement="bottom">
         <button class="action-btn" @click="resetView">
           <i class="fa-solid fa-home"></i>
@@ -204,8 +209,13 @@ const openQueryPanel = () => {
 }
 
 const resetView = () => {
-  cesiumStore.zoomToHome()
-  ElMessage.success('已回到初始视角')
+  try {
+    cesiumStore.zoomToHome()
+    ElMessage.success('已回到初始视角')
+  } catch (e) {
+    console.error('resetView failed:', e)
+    ElMessage.error('回到初始视角失败，请查看控制台日志')
+  }
 }
 
 const toggleFullscreen = () => {

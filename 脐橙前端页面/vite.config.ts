@@ -1,7 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'path'
-import createExternal from 'vite-plugin-external'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -12,11 +11,30 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       vue(),
-      createExternal({
-        externals: {
-          cesium: 'Cesium'
+      // 将 cesium 外部化到全局 Cesium 变量（替代 vite-plugin-external）
+      {
+        name: 'cesium-global',
+        enforce: 'post',
+        transform(code, id) {
+          if (id.includes('node_modules') || !/\.(js|ts|vue)$/.test(id)) return null
+          return {
+            code: code.replace(
+              /import\s+[\s\S]*?from\s+['"]cesium['"];?\s*/g,
+              ''
+            ),
+            map: null
+          }
+        },
+        renderChunk(code) {
+          return {
+            code: code.replace(
+              /import\s+[\s\S]*?from\s+['"]cesium['"];?\s*/g,
+              ''
+            ),
+            map: null
+          }
         }
-      })
+      }
     ],
     resolve: {
       alias: {
@@ -44,15 +62,16 @@ export default defineConfig(({ mode }) => {
           target: env.VITE_API_TARGET || 'http://127.0.0.1:8000',
           changeOrigin: true
         },
+        // HEC-RAS simulation frames served from local Nginx
         '/simulation/': {
           target: 'http://127.0.0.1:8081',
           changeOrigin: true
         },
-        // GeoServer 静态底图代理
-        '/geoserver': {
-          target: env.VITE_GEOSERVER_URL || 'http://127.0.0.1:8080',
+        // Proxy for the remote GeoTIFF base map (avoids CORS issues)
+        '/geotiff-proxy': {
+          target: 'http://47.113.147.127',
           changeOrigin: true,
-          rewrite: (path) => path.replace(/^\/geoserver/, '/geoserver')
+          rewrite: (path) => path.replace(/^\/geotiff-proxy/, '')
         }
       }
     }

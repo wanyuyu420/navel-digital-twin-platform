@@ -22,10 +22,10 @@ const isLoading = ref(false)
 let tileset: any = null
 
 const ORCHARD_POSITION = {
-  longitude: 116.5,
-  latitude: 27.13,
+  longitude: 116.497314,
+  latitude: 27.132186,
   height: 187,
-  rotationX: 0,   // 模型内部变换已经处理了朝向，不需额外旋转
+  rotationX: 0,
   rotationY: 0,
   rotationZ: 0,
   scale: 1,
@@ -75,7 +75,26 @@ async function loadModel() {
     console.log('  window.__orchardPos.rotationX = XXX')
     console.log('  window.__orchardTileset.modelMatrix = BIMAlignment.createModelMatrix(window.__orchardPos)')
 
-    viewer.flyTo(loadedTileset, { duration: 2 })
+    viewer.flyTo(loadedTileset, { duration: 2 }).then(() => {
+      // 飞行完成后保存相机位置，作为"回到初始视角"的目标
+      setTimeout(() => {
+        try {
+          const camera = viewer.camera
+          const cartographic = Cesium.Cartographic.fromCartesian(camera.position)
+          cesiumStore.setHomeView({
+            lon: Cesium.Math.toDegrees(cartographic.longitude),
+            lat: Cesium.Math.toDegrees(cartographic.latitude),
+            height: cartographic.height,
+            heading: camera.heading,
+            pitch: camera.pitch,
+            roll: camera.roll,
+          })
+          console.log('[OrchardBaseModel] Home view saved')
+        } catch (e) {
+          console.warn('[OrchardBaseModel] Failed to save home view:', e)
+        }
+      }, 500) // 等飞行完全结束再保存
+    })
   } catch (e) {
     console.error('[OrchardBaseModel] Failed:', e)
   } finally {
@@ -96,5 +115,6 @@ onUnmounted(() => {
   }
   delete (window as any).__orchardTileset
   delete (window as any).__BIMAlignment
+  delete (window as any).__orchardPos
 })
 </script>

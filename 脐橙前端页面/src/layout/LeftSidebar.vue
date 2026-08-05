@@ -33,37 +33,6 @@
 
       <!-- 图层面板 -->
       <div class="tab-panel" v-show="orchardStore.sidebarActiveTab === 'layers'">
-        <!-- GeoServer图层列表 -->
-        <div class="section">
-          <div class="section-title">GeoServer 底图图层</div>
-          <div
-            v-for="layer in orchardStore.geoServerLayers"
-            :key="layer.name"
-            class="layer-item"
-            :class="{ active: orchardStore.activeLayerId === layer.name }"
-            @click="orchardStore.activeLayerId = layer.name"
-          >
-            <el-switch
-              v-model="layer.visible"
-              size="small"
-              @click.stop
-              @change="onLayerToggle(layer)"
-            />
-            <span class="layer-name">{{ layer.title }}</span>
-            <div class="layer-opacity" v-if="layer.visible">
-              <el-slider
-                v-model="layer.opacity"
-                :min="0"
-                :max="1"
-                :step="0.05"
-                size="small"
-                @click.stop
-                @change="onLayerOpacityChange(layer)"
-              />
-            </div>
-          </div>
-        </div>
-
         <!-- 绘制图形图层 - 每个图形作为独立顶层图层 -->
         <template v-for="geo in orchardStore.drawnGeometries" :key="geo.id">
           <div class="section">
@@ -243,7 +212,7 @@ import { ref } from 'vue'
 import { useOrchardStore } from '@/stores/orchard'
 import { useCesiumStore } from '@/stores/cesium'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import type { GeoServerLayer, UploadedFile } from '@/types/orchard'
+import type { UploadedFile } from '@/types/orchard'
 
 const orchardStore = useOrchardStore()
 const cesiumStore = useCesiumStore()
@@ -458,13 +427,7 @@ function zoomToGeometry(geo: any) {
   ElMessage.success(`已缩放至: ${geo.name}`)
 }
 
-function onLayerToggle(_layer: GeoServerLayer) {
-  // 通知地图切换图层可见性
-}
 
-function onLayerOpacityChange(_layer: GeoServerLayer) {
-  // 通知地图更新图层透明度
-}
 </script>
 
 <style scoped lang="scss">

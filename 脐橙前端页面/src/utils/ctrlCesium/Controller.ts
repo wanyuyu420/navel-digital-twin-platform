@@ -103,8 +103,7 @@ class Controller {
     // Depth testing against terrain is disabled — the orchard GLB model provides its own terrain mesh
     viewer.scene.globe.depthTestAgainstTerrain = false
 
-    // Globe base color — dark background since imagery tiles are removed
-    // The 3D model layers (GLB/OSGB/BIM) serve as the primary basemap
+    // Globe base color — visible when imagery tiles are loaded
     this.setGlobeBaseColor(viewer, '#020617')
 
     // Reduce scroll wheel zoom sensitivity (default 5.0 — too fast)

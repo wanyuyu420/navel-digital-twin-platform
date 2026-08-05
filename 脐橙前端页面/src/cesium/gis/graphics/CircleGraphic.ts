@@ -71,7 +71,7 @@ export class CircleGraphic extends BaseGraphic {
     super(viewer, { ...options, type: 'circle' })
     this.showRadiusLabel = options.showRadiusLabel ?? false  // 默认不显示半径标签
     this.showAreaLabel = options.showAreaLabel ?? false      // 默认不显示面积标签
-    this.heightReference = options.heightReference ?? Cesium.HeightReference.NONE
+    this.heightReference = options.heightReference ?? Cesium.HeightReference.CLAMP_TO_GROUND
   }
 
   /**
@@ -173,28 +173,24 @@ export class CircleGraphic extends BaseGraphic {
     const ellipsoid = this.viewer.scene.globe.ellipsoid
     const centerCartographic = ellipsoid.cartesianToCartographic(this.centerPosition)
 
-    // 获取中心点的高度
-    const centerHeight = centerCartographic.height || 0
-
     // 生成圆形边界点（64个点，确保圆形足够平滑）
     const numPoints = 64
     const outlinePositions: Cesium.Cartesian3[] = []
 
     for (let i = 0; i <= numPoints; i++) {
       const angle = (i / numPoints) * 2 * Math.PI
-      // 直接计算边界点坐标，不使用 geodesic（避免高度变化）
       const pointCartographic = new Cesium.Cartographic(
         centerCartographic.longitude + (this.radius / ellipsoid.maximumRadius) * Math.cos(angle),
         centerCartographic.latitude + (this.radius / ellipsoid.maximumRadius) * Math.sin(angle),
-        centerHeight // 使用中心点的高度
       )
       outlinePositions.push(ellipsoid.cartographicToCartesian(pointCartographic))
     }
 
-    // 使用 Entity polyline 创建边框
+    // 使用 Entity polyline 创建边框（clampToGround 使边框贴在地形/3D模型表面）
     this.outlineEntity = this.viewer.entities.add({
       polyline: {
         positions: outlinePositions,
+        clampToGround: true,
         width: this.style.strokeWidth || 2,
         material: Cesium.Color.fromCssColorString(this.style.strokeColor || '#000000'),
       },
