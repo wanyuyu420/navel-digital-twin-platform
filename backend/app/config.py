@@ -25,6 +25,25 @@ class Settings(BaseSettings):
     # Ubuntu:   /home/user/data/gis-data
     gis_data_dir: str | None = None
 
+    # ===== GeoScene Server 连接配置 =====
+    geoscene_server_url: str = ""
+    """GeoScene Server 根地址"""
+
+    geoscene_feature_server_url: str = ""
+    """要素服务地址"""
+
+    geoscene_image_server_url: str = ""
+    """影像服务地址"""
+
+    geoscene_username: str = ""
+    """GeoScene Server 用户名"""
+
+    geoscene_password: str = ""
+    """GeoScene Server 密码"""
+
+    geoscene_token_duration: int = 120
+    """Token 有效期（分钟）"""
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

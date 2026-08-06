@@ -2,8 +2,10 @@ import os
 import shutil
 import uuid
 import math
+import time
 from typing import List, Dict, Any
 
+import httpx
 from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, case
@@ -17,6 +19,10 @@ from app.schemas.orange import (
     DiagnoseResultSchema,
     FertilizerStat,
     OrangeTreeOut,
+    HistoricalTreesOut,
+    TreeFeature,
+    growth_index_to_status,
+    fertilizer_level_to_kg,
 )
 from app.services.tif_service import TifService
 from pyproj import Transformer
@@ -157,13 +163,71 @@ async def spatial_diagnose(
         trees=trees_out,
     )
 
+
+@router.get(
+    "/historical-trees",
+    response_model=HistoricalTreesOut,
+    status_code=status.HTTP_200_OK,
+    summary="开屏静态会师 — 历史老树全量坐标与属性",
+)
+async def get_historical_trees(db: AsyncSession = Depends(get_session)):
+    """
+    大屏开屏时前端一次性拉取全部历史老树（batch_id=historical_zone）的
+    经纬度坐标与长势/施肥属性，用于在 3D 底图模型表面铺设隐形拾取点。
+    """
+    stmt = (
+        select(
+            OrangeTree.id,
+            OrangeTree.batch_id,
+            OrangeTree.confidence,
+            OrangeTree.compactness,
+            OrangeTree.shape_length,
+            OrangeTree.shape_area,
+            OrangeTree.value_field,
+            OrangeTree.count_field,
+            OrangeTree.area_m2,
+            OrangeTree.height_m,
+            OrangeTree.crown_diameter,
+            OrangeTree.volume_m3,
+            OrangeTree.growth_index,
+            OrangeTree.slope_degree,
+            OrangeTree.aspect,
+            OrangeTree.fertilizer_level,
+            func.ST_X(func.ST_Transform(OrangeTree.geom, 4326)).label("lng"),
+            func.ST_Y(func.ST_Transform(OrangeTree.geom, 4326)).label("lat"),
+        )
+        .where(OrangeTree.batch_id == "historical_zone")
+    )
+    rows = (await db.execute(stmt)).all()
+
+    trees_out = []
+    for row in rows:
+        trees_out.append(OrangeTreeOut(
+            id=row.id,
+            batch_id=row.batch_id,
+            lng=round(row.lng, 6),
+            lat=round(row.lat, 6),
+            confidence=row.confidence,
+            compactness=row.compactness,
+            shape_length=row.shape_length,
+            shape_area=row.shape_area,
+            value_field=row.value_field,
+            count_field=row.count_field,
+            area_m2=row.area_m2,
+            height_m=row.height_m,
+            crown_diameter=row.crown_diameter,
+            volume_m3=row.volume_m3,
+            growth_index=row.growth_index,
+            slope_degree=row.slope_degree,
+            aspect=row.aspect,
+            fertilizer_level=row.fertilizer_level,
+        ))
+
+    return HistoricalTreesOut(total=len(trees_out), trees=trees_out)
+
+
 UPLOAD_DIR = "data/uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
-class FreshTreeResponse(BaseModel):
-    tree_id: int
-    geometry_geojson: Dict[str, Any]
-    attributes: Dict[str, Any]
 
 class TifUploadResponse(BaseModel):
     success: bool
@@ -234,7 +298,7 @@ async def upload_orange_tif(file: UploadFile = File(...)):
             "status": "pending",
             "message": "Task created",
             "total_trees": 0,
-            "trees": [],
+            "fresh_trees": [],
             "progress": 0.0,
         }
 
@@ -263,7 +327,7 @@ class TaskStatusOut(BaseModel):
     status: str  # pending | processing | completed | failed
     message: str = ""
     total_trees: int = 0
-    trees: list = []
+    fresh_trees: list = []
     progress: float = 0.0  # 0.0 ~ 1.0
 
 
@@ -320,6 +384,103 @@ def _calc_growth_fields(mask: np.ndarray, gsd: float, height_m: float = None) ->
     }
 
 
+# ===== GeoScene Server 集成 =====
+
+_geoscene_token: dict = {}
+
+
+def _get_geoscene_token() -> str | None:
+    """获取 GeoScene Server Token，带缓存"""
+    settings = get_settings()
+    if not settings.geoscene_server_url or not settings.geoscene_username:
+        return None
+
+    now = time.time()
+    cached = _geoscene_token.get("token")
+    expires = _geoscene_token.get("expires", 0)
+    if cached and expires > now + 60:
+        return cached
+
+    try:
+        resp = httpx.post(
+            f"{settings.geoscene_server_url}/tokens/generateToken",
+            data={
+                "username": settings.geoscene_username,
+                "password": settings.geoscene_password,
+                "client": "referer",
+                "referer": settings.geoscene_server_url,
+                "expiration": settings.geoscene_token_duration,
+                "f": "json",
+            },
+            timeout=10,
+        )
+        data = resp.json()
+        _geoscene_token["token"] = data["token"]
+        _geoscene_token["expires"] = now + settings.geoscene_token_duration * 60
+        return _geoscene_token["token"]
+    except Exception as e:
+        print(f"[GeoScene] Token fetch failed: {e}")
+        return None
+
+
+def _publish_to_geoscene(trees_data: list, batch_id: str):
+    """将推理检测到的树木同步发布到 GeoScene FeatureServer"""
+    token = _get_geoscene_token()
+    if not token:
+        print("[GeoScene] Skipping publish - no valid token")
+        return
+
+    settings = get_settings()
+    if not settings.geoscene_feature_server_url:
+        print("[GeoScene] Skipping publish - no feature server URL configured")
+        return
+
+    adds = []
+    for tree in trees_data:
+        adds.append({
+            "geometry": {
+                "x": tree["utm_x"],
+                "y": tree["utm_y"],
+                "spatialReference": {"wkid": 32650},
+            },
+            "attributes": {
+                "batch_id": batch_id,
+                "confidence": tree.get("iou_score"),
+                "compactness": tree.get("compactness"),
+                "shape_length": tree.get("shape_length"),
+                "shape_area": tree.get("area_m2"),
+                "area_m2": tree.get("area_m2"),
+                "height_m": tree.get("height_m"),
+                "crown_diameter": tree.get("crown_diameter"),
+                "volume_m3": tree.get("volume_m3"),
+                "growth_index": tree.get("growth_index"),
+                "slope_degree": tree.get("slope_degree"),
+                "aspect": tree.get("aspect"),
+                "fertilizer_level": tree.get("fertilizer_level", 0),
+            },
+        })
+
+    try:
+        url = f"{settings.geoscene_feature_server_url}/0/applyEdits"
+        resp = httpx.post(
+            url,
+            params={"f": "json", "token": token},
+            json={"adds": adds},
+            timeout=60,
+        )
+        result = resp.json()
+        if result.get("addResults"):
+            success = sum(
+                1 for r in result["addResults"] if r.get("success")
+            )
+            print(f"[GeoScene] Published {success}/{len(adds)} trees to FeatureServer")
+        else:
+            err = result.get("error", resp.text)
+            print(f"[GeoScene] Publish error: {err}")
+    except Exception as e:
+        print(f"[GeoScene] Publish failed: {e}")
+
+
 def _persist_trees_sync(trees_data: list, batch_id: str):
     """Persist detected trees to DB via sync connection (runs in background thread)."""
     from sqlalchemy import create_engine
@@ -356,6 +517,49 @@ def _persist_trees_sync(trees_data: list, batch_id: str):
         print(f"[Persist] Failed to save trees: {e}")
     finally:
         engine.dispose()
+
+
+def _make_geojson_from_mask(
+    mask: np.ndarray,
+    window_x: int,
+    window_y: int,
+    transform,
+    wgs84_transformer,
+) -> dict | None:
+    """
+    将SAM输出的二进制分割mask转为WGS84 GeoJSON Polygon。
+    抽取最大外轮廓 → 简化顶点 → 像素坐标转WGS84经纬度 → 闭合环。
+    """
+    contours, _ = cv2.findContours(
+        mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    largest = max(contours, key=cv2.contourArea)
+    perimeter = cv2.arcLength(largest, closed=True)
+    if perimeter < 4.0:
+        return None
+
+    epsilon = 0.005 * perimeter  # 保留 99.5% 周长精度，大幅压缩顶点数
+    simplified = cv2.approxPolyDP(largest, epsilon, closed=True)
+
+    coords = []
+    for pt in simplified:
+        px, py = pt[0]
+        global_px = window_x + float(px)
+        global_py = window_y + float(py)
+        geo_x, geo_y = rasterio.transform.xy(transform, global_py, global_px)
+        lng, lat = wgs84_transformer.transform(geo_x, geo_y)
+        coords.append([round(lng, 8), round(lat, 8)])
+
+    if len(coords) < 4:
+        return None
+
+    # GeoJSON 要求首尾坐标一致
+    if coords[0] != coords[-1]:
+        coords.append(coords[0])
+
+    return {"type": "Polygon", "coordinates": [coords]}
 
 
 def _run_inference_task(task_id: str, file_path: str):
@@ -430,7 +634,12 @@ def _run_inference_task(task_id: str, file_path: str):
                 growth = _calc_growth_fields(tree["segmentation_mask"], gsd, tree_h)
                 utm_x, utm_y = transformer_utm.transform(lng, lat)
                 slope_info = ElevationService.get_slope_aspect(lat, lng, utm_x, utm_y); band_val = tile_rgb[int(local_cy), int(local_cx)].tolist(); raw_val = float(rio_ds.read(1, window=((int(global_py),int(global_py)+1), (int(global_px),int(global_px)+1)))[0,0]) if 0 <= int(global_py) < rio_ds.shape[0] and 0 <= int(global_px) < rio_ds.shape[1] else None if 0 <= int(local_cy) < tile_rgb.shape[0] and 0 <= int(local_cx) < tile_rgb.shape[1] else None
+                geojson = _make_geojson_from_mask(
+                    tree["segmentation_mask"], window_x, window_y,
+                    transform, transformer)
+                tree_uuid = f"tree_{uuid.uuid4().hex[:8]}"
                 all_detected_trees.append({
+                    "id": tree_uuid,
                     "batch_id": batch_id,
                     "lng": round(lng, 8),
                     "lat": round(lat, 8),
@@ -441,6 +650,9 @@ def _run_inference_task(task_id: str, file_path: str):
                     "shape_area": growth.get("area_m2", 0),
                     "band_value": band_val, "value": raw_val, **slope_info,
                     **growth,
+                    "growth_status": growth_index_to_status(growth.get("growth_index")),
+                    "fertilizer_kg": fertilizer_level_to_kg(growth.get("fertilizer_level", 0)),
+                    "geometry": geojson,
                 })
 
             tile_count += 1
@@ -449,10 +661,13 @@ def _run_inference_task(task_id: str, file_path: str):
         # Persist detected trees to database for spatial-diagnose
         _persist_trees_sync(all_detected_trees, batch_id)
 
+        # Publish to GeoScene FeatureServer
+        _publish_to_geoscene(all_detected_trees, batch_id)
+
         with _task_lock:
             _task_store[task_id]["status"] = "completed"
             _task_store[task_id]["total_trees"] = len(all_detected_trees)
-            _task_store[task_id]["trees"] = all_detected_trees
+            _task_store[task_id]["fresh_trees"] = all_detected_trees
 
         rio_ds.close()
         if os.path.exists(file_path):
@@ -491,7 +706,7 @@ async def upload_and_interpret_tif(file: UploadFile = File(...)):
             "status": "pending",
             "message": "Task created",
             "total_trees": 0,
-            "trees": [],
+            "fresh_trees": [],
             "progress": 0.0,
         }
 
@@ -502,7 +717,7 @@ async def upload_and_interpret_tif(file: UploadFile = File(...)):
         "status": "pending",
         "message": "Task created, processing in background",
         "total_trees": 0,
-        "trees": [],
+        "fresh_trees": [],
         "progress": 0.0,
     }
 
