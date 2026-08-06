@@ -10,6 +10,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+# 浏览器调试临时目录
+edge_profile/
+
 # 敏感信息
 .env
 .env.local
