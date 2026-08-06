@@ -10,6 +10,7 @@ import { useAppStore } from '@/stores/app'
 import { GController } from '@/utils/ctrlCesium/Controller'
 import { getBaseMapConfig, getBaseMapImageryList } from '@/mock/baseMapData'
 import { addGeotiffBasemap } from '@/utils/geotiffBasemap'
+import { addOssBasemap } from '@/utils/ossBasemap'
 
 declare const Cesium: any
 
@@ -50,6 +51,9 @@ onMounted(async () => {
 
 	// Load GeoTIFF base map (async, non-blocking)
 	addGeotiffBasemap(viewer)
+
+	// Load Aliyun OSS basemap layers: XYZ tiles + tree.geojson + 3D tileset
+	addOssBasemap(viewer)
 })
 
 onUnmounted(() => {
