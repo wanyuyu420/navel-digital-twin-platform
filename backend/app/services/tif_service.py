@@ -1,12 +1,14 @@
 import rasterio
 from rasterio.windows import Window
 import numpy as np
+import cv2
+import cv2
 
 
 class TifService:
 
     @staticmethod
-    def slice_tif_generator(file_path: str, window_size: int = 512, overlap: int = 64):
+    def slice_tif_generator(file_path: str, window_size: int = 512, overlap: int = 64, use_clahe: bool = False):
         with rasterio.open(file_path) as src:
             crs = src.crs
             transform = src.transform
@@ -36,7 +38,10 @@ class TifService:
 
                     # 数值归一化：uint16 / int16 → uint8
                     if tile_data.dtype == np.uint16:
-                        tile_data = (tile_data / 65535.0 * 255).astype(np.uint8)
+                        if tile_data.max() <= 255:
+                            tile_data = tile_data.astype(np.uint8)
+                        else:
+                            tile_data = (tile_data / 65535.0 * 255).astype(np.uint8)
                     elif tile_data.dtype == np.int16:
                         tile_data = ((tile_data.astype(np.int32) + 32768)
                                      / 65535.0 * 255).astype(np.uint8)

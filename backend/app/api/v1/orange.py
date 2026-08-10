@@ -2,25 +2,20 @@ import os
 import shutil
 import uuid
 import math
-import time
-from typing import List, Dict, Any
+import json as json_mod
+from typing import Any
 
-import httpx
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
+from fastapi import APIRouter, File, UploadFile, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import func, select, case
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.database import get_session
-from app.models.orange import OrangeTree
+from app.services.geoscene_service import GeoSceneService, GeoSceneError
 from app.schemas.orange import (
     SpatialQuerySchema,
     DiagnoseResultSchema,
     FertilizerStat,
     OrangeTreeOut,
     HistoricalTreesOut,
-    TreeFeature,
     growth_index_to_status,
     fertilizer_level_to_kg,
 )
@@ -44,125 +39,88 @@ router = APIRouter(prefix="/orange", tags=["脐橙三维空间大屏诊断API"])
 )
 async def spatial_diagnose(
     payload: SpatialQuerySchema,
-    db: AsyncSession = Depends(get_session),
 ):
     """
     大屏拉框空间诊断接口：
     1. 接收前端 Cesium 传过来的 WGS84 闭合多边形
-    2. PostGIS ST_Transform 把经纬度渔网投射到 UTM 32650
-    3. GIST 空间索引秒级检索框内树木 + 聚合看板指标
+    2. 调用 GeoScene FeatureServer 执行空间查询
+    3. 返回框内树木 + 聚合看板指标
     """
     coords = payload.coordinates
 
     # 智能识别经纬度顺序 + 自动强行闭合
-    valid_coords = []
+    ring = []
     for pt in coords:
         if len(pt) < 2:
             continue
         if pt[0] < pt[1]:  # pt[0]是纬度(≈27)，pt[1]是经度(≈116)，调换
             lng, lat = pt[1], pt[0]
-        else:              # pt[0]是经度(≈116)，pt[1]是纬度(≈27)，不变
+        else:
             lng, lat = pt[0], pt[1]
-        valid_coords.append(f"{lng} {lat}")
+        ring.append([lng, lat])
 
-    # 如果首尾不同，后端强制把口袋扎紧
-    if valid_coords and valid_coords[0] != valid_coords[-1]:
-        valid_coords.append(valid_coords[0])
+    if ring and ring[0] != ring[-1]:
+        ring.append(ring[0])
 
-    wkt_polygon = f"POLYGON(({', '.join(valid_coords)}))"
+    geometry = {"rings": [ring], "spatialReference": {"wkid": 4326}}
 
-    polygon_4326 = func.ST_GeomFromText(wkt_polygon, 4326)
-    target_roi = func.ST_Transform(polygon_4326, 32650)
-
-    # 一次 I/O 聚合查询：计数 + 均值 + 施肥分级统计
-    stmt = (
-        select(
-            func.count(OrangeTree.id).label("total_count"),
-            func.avg(OrangeTree.height_m).label("avg_height"),
-            func.avg(OrangeTree.shape_area).label("avg_area"),
-            func.avg(OrangeTree.growth_index).label("avg_growth_index"),
-            func.sum(case((OrangeTree.fertilizer_level == 1, 1), else_=0)).label("light_count"),
-            func.sum(case((OrangeTree.fertilizer_level == 2, 1), else_=0)).label("medium_count"),
-            func.sum(case((OrangeTree.fertilizer_level == 3, 1), else_=0)).label("heavy_count"),
+    try:
+        stats = GeoSceneService.query_stats(geometry=geometry)
+        features = GeoSceneService.query_features(
+            geometry=json_mod.dumps(geometry),
+            geometry_type="esriGeometryPolygon",
+            spatial_rel="esriSpatialRelContains",
+            out_sr=4326,
+            limit=500,
+            return_geometry=True,
         )
-        .where(func.ST_Contains(target_roi, OrangeTree.geom))
-    )
-
-    result = (await db.execute(stmt)).one_or_none()
-
-    if result is None or result.total_count == 0:
-        return DiagnoseResultSchema(
-            total_count=0,
-            avg_height=0.0,
-            avg_area=0.0,
-            avg_growth_index=0.0,
-            fertilizer_recommendation=FertilizerStat(),
-            trees=[],
+    except GeoSceneError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"GeoScene Server spatial query failed: {e}",
         )
-
-    # 查询框内树木明细：ST_Transform 转回 WGS84，ST_X/ST_Y 现场拆解为纯数字经纬度
-    tree_stmt = (
-        select(
-            OrangeTree.id,
-            OrangeTree.batch_id,
-            OrangeTree.confidence,
-            OrangeTree.compactness,
-            OrangeTree.shape_length,
-            OrangeTree.shape_area,
-            OrangeTree.value_field,
-            OrangeTree.count_field,
-            OrangeTree.area_m2,
-            OrangeTree.height_m,
-            OrangeTree.crown_diameter,
-            OrangeTree.volume_m3,
-            OrangeTree.growth_index,
-            OrangeTree.slope_degree,
-            OrangeTree.aspect,
-            OrangeTree.fertilizer_level,
-            func.ST_X(func.ST_Transform(OrangeTree.geom, 4326)).label("lng"),
-            func.ST_Y(func.ST_Transform(OrangeTree.geom, 4326)).label("lat"),
-        )
-        .where(func.ST_Contains(target_roi, OrangeTree.geom))
-        .limit(500)
-    )
-    tree_rows = (await db.execute(tree_stmt)).all()
 
     trees_out = []
-    for row in tree_rows:
+    for feat in features:
+        a = feat.get("attributes", {})
+        g = feat.get("geometry", {})
+        lng, lat = None, None
+        if g and "x" in g:
+            lng, lat = round(g["x"], 6), round(g["y"], 6)
+
         trees_out.append(OrangeTreeOut(
-            id=row.id,
-            batch_id=row.batch_id,
-            lng=round(row.lng, 6),
-            lat=round(row.lat, 6),
-            confidence=row.confidence,
-            compactness=row.compactness,
-            shape_length=row.shape_length,
-            shape_area=row.shape_area,
-            value_field=row.value_field,
-            count_field=row.count_field,
-            area_m2=row.area_m2,
-            height_m=row.height_m,
-            crown_diameter=row.crown_diameter,
-            volume_m3=row.volume_m3,
-            growth_index=row.growth_index,
-            slope_degree=row.slope_degree,
-            aspect=row.aspect,
-            fertilizer_level=row.fertilizer_level,
+            id=a.get("tree_id"),
+            batch_id=a.get("batch_id"),
+            lng=lng,
+            lat=lat,
+            confidence=a.get("confidence"),
+            compactness=a.get("compactness"),
+            shape_length=a.get("shape_len"),
+            shape_area=a.get("Shape__Area"),
+            value_field=a.get("val_field"),
+            count_field=a.get("cnt_field"),
+            area_m2=a.get("area_m2"),
+            height_m=a.get("height_m"),
+            crown_diameter=a.get("crown_diam"),
+            volume_m3=a.get("volume_m3"),
+            growth_index=a.get("growth_idx"),
+            slope_degree=a.get("slope_deg"),
+            aspect=a.get("aspect"),
+            fertilizer_level=a.get("fert_level"),
         ))
 
     return DiagnoseResultSchema(
-        total_count=result.total_count,
-        avg_height=round(result.avg_height, 2) if result.avg_height else None,
-        avg_area=round(result.avg_area, 2) if result.avg_area else None,
-        avg_growth_index=round(result.avg_growth_index, 4) if result.avg_growth_index else None,
+        total_count=stats["total_count"],
+        avg_height=stats["avg_height"],
+        avg_area=stats["avg_area"],
+        avg_growth_index=stats["avg_growth_index"],
         fertilizer_recommendation=FertilizerStat(
-            light_level_count=result.light_count or 0,
-            medium_level_count=result.medium_count or 0,
-            heavy_level_count=result.heavy_count or 0,
+            light_level_count=stats["light_count"],
+            medium_level_count=stats["medium_count"],
+            heavy_level_count=stats["heavy_count"],
         ),
         trees=trees_out,
     )
-
 
 @router.get(
     "/historical-trees",
@@ -170,57 +128,53 @@ async def spatial_diagnose(
     status_code=status.HTTP_200_OK,
     summary="开屏静态会师 — 历史老树全量坐标与属性",
 )
-async def get_historical_trees(db: AsyncSession = Depends(get_session)):
+async def get_historical_trees():
     """
     大屏开屏时前端一次性拉取全部历史老树（batch_id=historical_zone）的
     经纬度坐标与长势/施肥属性，用于在 3D 底图模型表面铺设隐形拾取点。
+
+    所有空间数据查询均通过 GeoScene FeatureServer。
     """
-    stmt = (
-        select(
-            OrangeTree.id,
-            OrangeTree.batch_id,
-            OrangeTree.confidence,
-            OrangeTree.compactness,
-            OrangeTree.shape_length,
-            OrangeTree.shape_area,
-            OrangeTree.value_field,
-            OrangeTree.count_field,
-            OrangeTree.area_m2,
-            OrangeTree.height_m,
-            OrangeTree.crown_diameter,
-            OrangeTree.volume_m3,
-            OrangeTree.growth_index,
-            OrangeTree.slope_degree,
-            OrangeTree.aspect,
-            OrangeTree.fertilizer_level,
-            func.ST_X(func.ST_Transform(OrangeTree.geom, 4326)).label("lng"),
-            func.ST_Y(func.ST_Transform(OrangeTree.geom, 4326)).label("lat"),
+    try:
+        features = GeoSceneService.query_features(
+            where="batch_id='historical_zone'",
+            out_sr=4326,
+            limit=10000,
+            return_geometry=True,
         )
-        .where(OrangeTree.batch_id == "historical_zone")
-    )
-    rows = (await db.execute(stmt)).all()
+    except GeoSceneError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"GeoScene Server query failed: {e}",
+        )
 
     trees_out = []
-    for row in rows:
+    for feat in features:
+        a = feat.get("attributes", {})
+        g = feat.get("geometry", {})
+        lng, lat = None, None
+        if g and "x" in g:
+            lng, lat = round(g["x"], 6), round(g["y"], 6)
+
         trees_out.append(OrangeTreeOut(
-            id=row.id,
-            batch_id=row.batch_id,
-            lng=round(row.lng, 6),
-            lat=round(row.lat, 6),
-            confidence=row.confidence,
-            compactness=row.compactness,
-            shape_length=row.shape_length,
-            shape_area=row.shape_area,
-            value_field=row.value_field,
-            count_field=row.count_field,
-            area_m2=row.area_m2,
-            height_m=row.height_m,
-            crown_diameter=row.crown_diameter,
-            volume_m3=row.volume_m3,
-            growth_index=row.growth_index,
-            slope_degree=row.slope_degree,
-            aspect=row.aspect,
-            fertilizer_level=row.fertilizer_level,
+            id=a.get("tree_id"),
+            batch_id=a.get("batch_id"),
+            lng=lng,
+            lat=lat,
+            confidence=a.get("confidence"),
+            compactness=a.get("compactness"),
+            shape_length=a.get("shape_len"),
+            shape_area=a.get("Shape__Area"),
+            value_field=a.get("val_field"),
+            count_field=a.get("cnt_field"),
+            area_m2=a.get("area_m2"),
+            height_m=a.get("height_m"),
+            crown_diameter=a.get("crown_diam"),
+            volume_m3=a.get("volume_m3"),
+            growth_index=a.get("growth_idx"),
+            slope_degree=a.get("slope_deg"),
+            aspect=a.get("aspect"),
+            fertilizer_level=a.get("fert_level"),
         ))
 
     return HistoricalTreesOut(total=len(trees_out), trees=trees_out)
@@ -384,107 +338,14 @@ def _calc_growth_fields(mask: np.ndarray, gsd: float, height_m: float = None) ->
     }
 
 
-# ===== GeoScene Server 集成 =====
-
-_geoscene_token: dict = {}
-
-
-def _get_geoscene_token() -> str | None:
-    """获取 GeoScene Server Token，带缓存"""
-    settings = get_settings()
-    if not settings.geoscene_server_url or not settings.geoscene_username:
-        return None
-
-    now = time.time()
-    cached = _geoscene_token.get("token")
-    expires = _geoscene_token.get("expires", 0)
-    if cached and expires > now + 60:
-        return cached
-
-    try:
-        resp = httpx.post(
-            f"{settings.geoscene_server_url}/tokens/generateToken",
-            data={
-                "username": settings.geoscene_username,
-                "password": settings.geoscene_password,
-                "client": "referer",
-                "referer": settings.geoscene_server_url,
-                "expiration": settings.geoscene_token_duration,
-                "f": "json",
-            },
-            timeout=10,
-        )
-        data = resp.json()
-        _geoscene_token["token"] = data["token"]
-        _geoscene_token["expires"] = now + settings.geoscene_token_duration * 60
-        return _geoscene_token["token"]
-    except Exception as e:
-        print(f"[GeoScene] Token fetch failed: {e}")
-        return None
-
-
-def _publish_to_geoscene(trees_data: list, batch_id: str):
-    """将推理检测到的树木同步发布到 GeoScene FeatureServer"""
-    token = _get_geoscene_token()
-    if not token:
-        print("[GeoScene] Skipping publish - no valid token")
-        return
-
-    settings = get_settings()
-    if not settings.geoscene_feature_server_url:
-        print("[GeoScene] Skipping publish - no feature server URL configured")
-        return
-
-    adds = []
-    for tree in trees_data:
-        adds.append({
-            "geometry": {
-                "x": tree["utm_x"],
-                "y": tree["utm_y"],
-                "spatialReference": {"wkid": 32650},
-            },
-            "attributes": {
-                "batch_id": batch_id,
-                "confidence": tree.get("iou_score"),
-                "compactness": tree.get("compactness"),
-                "shape_length": tree.get("shape_length"),
-                "shape_area": tree.get("area_m2"),
-                "area_m2": tree.get("area_m2"),
-                "height_m": tree.get("height_m"),
-                "crown_diameter": tree.get("crown_diameter"),
-                "volume_m3": tree.get("volume_m3"),
-                "growth_index": tree.get("growth_index"),
-                "slope_degree": tree.get("slope_degree"),
-                "aspect": tree.get("aspect"),
-                "fertilizer_level": tree.get("fertilizer_level", 0),
-            },
-        })
-
-    try:
-        url = f"{settings.geoscene_feature_server_url}/0/applyEdits"
-        resp = httpx.post(
-            url,
-            params={"f": "json", "token": token},
-            json={"adds": adds},
-            timeout=60,
-        )
-        result = resp.json()
-        if result.get("addResults"):
-            success = sum(
-                1 for r in result["addResults"] if r.get("success")
-            )
-            print(f"[GeoScene] Published {success}/{len(adds)} trees to FeatureServer")
-        else:
-            err = result.get("error", resp.text)
-            print(f"[GeoScene] Publish error: {err}")
-    except Exception as e:
-        print(f"[GeoScene] Publish failed: {e}")
+# ===== GeoScene Server integration now handled by GeoSceneService (see app/services/geoscene_service.py) =====
 
 
 def _persist_trees_sync(trees_data: list, batch_id: str):
     """Persist detected trees to DB via sync connection (runs in background thread)."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
+    from app.models.orange import OrangeTree
 
     if not trees_data:
         return
@@ -594,7 +455,7 @@ def _run_inference_task(task_id: str, file_path: str):
         tile_count = 0
         rio_ds = rasterio.open(file_path)
 
-        tiles = list(TifService.slice_tif_generator(file_path))
+        tiles = list(TifService.slice_tif_generator(file_path, overlap=112))
         total_tiles = len(tiles)
 
         for tile_info in tiles:
@@ -611,7 +472,7 @@ def _run_inference_task(task_id: str, file_path: str):
                 continue
 
             # Step 1: YOLO detects tree canopy boxes
-            boxes = YoloService.detect_boxes(tile_rgb, yolo_model, conf=0.15)
+            boxes = YoloService.detect_boxes(tile_rgb, yolo_model, conf=0.135)
             if len(boxes) == 0:
                 tile_count += 1
                 _update_progress(task_id, tile_count, total_tiles)
@@ -662,7 +523,7 @@ def _run_inference_task(task_id: str, file_path: str):
         _persist_trees_sync(all_detected_trees, batch_id)
 
         # Publish to GeoScene FeatureServer
-        _publish_to_geoscene(all_detected_trees, batch_id)
+        GeoSceneService.add_features([{"attributes": t, "geometry": {"x": t["utm_x"], "y": t["utm_y"], "spatialReference": {"wkid": 32650}}} for t in all_detected_trees])
 
         with _task_lock:
             _task_store[task_id]["status"] = "completed"

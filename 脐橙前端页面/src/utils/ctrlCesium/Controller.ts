@@ -94,6 +94,9 @@ class Controller {
 
     const viewer = new Cesium.Viewer(mapID, vConfig)
 
+    window.viewer = viewer
+
+
     // Hide Cesium logo if configured
     if (!baseMapConfig.logo) {
       const creditContainer = viewer.cesiumWidget.creditContainer as HTMLElement
