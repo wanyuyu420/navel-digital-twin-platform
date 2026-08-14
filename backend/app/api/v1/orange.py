@@ -392,6 +392,7 @@ def _persist_trees_sync(trees_data: list, batch_id: str):
                     shape_length=tree.get("shape_length"),
                     shape_area=tree.get("shape_area"),
                     value_field=tree.get("value"),
+                    count_field=tree.get("area_pixels"),
                     area_m2=tree.get("area_m2"),
                     height_m=tree.get("height_m"),
                     crown_diameter=tree.get("crown_diameter"),
@@ -425,6 +426,31 @@ def _clear_geoscene_batch(batch_id: str):
             print(f"[Overwrite] Removed {len(ids)} old GeoScene features (batch: {batch_id})")
     except GeoSceneError as e:
         print(f"[Overwrite] GeoScene cleanup failed (batch {batch_id}): {e}")
+
+
+def _tree_to_feature_attrs(t: dict) -> dict:
+    """把推理结果 dict 映射成 GeoScene layer 0 的字段。
+
+    只保留层里真实存在的 17 列全名；id 由服务器自动分配不发送；
+    geom 由 geometry 参数承载（层里的 geom 是 WKB 文本，后端不读，留空）。
+    """
+    return {
+        "batch_id": t.get("batch_id"),
+        "confidence": t.get("iou_score"),
+        "compactness": t.get("compactness"),
+        "shape_length": t.get("shape_length"),
+        "shape_area": t.get("shape_area"),
+        "value": t.get("value"),
+        "count": t.get("area_pixels"),
+        "area_m2": t.get("area_m2"),
+        "height_m": t.get("height_m"),
+        "crown_diameter": t.get("crown_diameter"),
+        "volume_m3": t.get("volume_m3"),
+        "growth_index": t.get("growth_index"),
+        "slope_degree": t.get("slope_degree"),
+        "aspect": t.get("aspect"),
+        "fertilizer_level": t.get("fertilizer_level", 0),
+    }
 
 
 def _make_geojson_from_mask(
@@ -572,8 +598,12 @@ def _run_inference_task(task_id: str, file_path: str):
         # Persist detected trees to database for spatial-diagnose（内部会先删旧的）
         _persist_trees_sync(all_detected_trees, batch_id)
 
-        # Publish to GeoScene FeatureServer
-        GeoSceneService.add_features([{"attributes": t, "geometry": {"x": t["utm_x"], "y": t["utm_y"], "spatialReference": {"wkid": 32650}}} for t in all_detected_trees])
+        # Publish to GeoScene FeatureServer（只发层里真实存在的字段）
+        GeoSceneService.add_features([
+            {"attributes": _tree_to_feature_attrs(t),
+             "geometry": {"x": t["utm_x"], "y": t["utm_y"], "spatialReference": {"wkid": 32650}}}
+            for t in all_detected_trees
+        ])
 
         with _task_lock:
             _task_store[task_id]["status"] = "completed"
