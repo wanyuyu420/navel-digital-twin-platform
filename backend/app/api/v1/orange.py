@@ -349,9 +349,27 @@ def _calc_growth_fields(mask: np.ndarray, gsd: float, height_m: float = None) ->
 # ===== GeoScene Server integration now handled by GeoSceneService (see app/services/geoscene_service.py) =====
 
 
+def _stable_batch_id(file_path: str) -> str:
+    """从（可能被 UUID 前缀污染一次或多次的）文件名还原原始名，作为稳定 batch_id。
+
+    上传时文件名会被加 `{uuid4().hex}_` 前缀，重复上传同一张图会得到不同 batch_id，
+    导致重复入库。这里剥掉开头所有 32 位十六进制 UUID 段，只保留原始文件名，
+    使同一张图多次上传得到同一个 batch_id，从而支持覆盖式重算。
+    """
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    parts = stem.split('_')
+    hex_chars = set('0123456789abcdef')
+    while len(parts) > 1 and len(parts[0]) == 32 and set(parts[0].lower()) <= hex_chars:
+        parts.pop(0)
+    return '_'.join(parts) if parts else stem
+
+
 def _persist_trees_sync(trees_data: list, batch_id: str):
-    """Persist detected trees to DB via sync connection (runs in background thread)."""
-    from sqlalchemy import create_engine
+    """Persist detected trees to DB via sync connection (runs in background thread).
+
+    覆盖式写入：先删除同 batch_id 的旧数据，再插入新结果，避免重复上传产生重复树。
+    """
+    from sqlalchemy import create_engine, delete
     from sqlalchemy.orm import Session
     from app.models.orange import OrangeTree
 
@@ -362,6 +380,9 @@ def _persist_trees_sync(trees_data: list, batch_id: str):
     engine = create_engine(settings.database_url_sync, echo=False)
     try:
         with Session(engine) as session:
+            removed = session.execute(
+                delete(OrangeTree).where(OrangeTree.batch_id == batch_id)
+            ).rowcount
             for tree in trees_data:
                 session.add(OrangeTree(
                     batch_id=batch_id,
@@ -381,11 +402,29 @@ def _persist_trees_sync(trees_data: list, batch_id: str):
                     fertilizer_level=tree.get("fertilizer_level", 0),
                 ))
             session.commit()
-            print(f"[Persist] {len(trees_data)} trees saved to DB (batch: {batch_id})")
+            print(f"[Persist] Removed {removed} old rows, saved {len(trees_data)} trees (batch: {batch_id})")
     except Exception as e:
         print(f"[Persist] Failed to save trees: {e}")
     finally:
         engine.dispose()
+
+
+def _clear_geoscene_batch(batch_id: str):
+    """删除 GeoScene 上同 batch_id 的旧要素（覆盖式重算前调用，只清本批、不动历史老树）。"""
+    try:
+        escaped = batch_id.replace("'", "''")
+        existing = GeoSceneService.query_features(
+            where=f"batch_id='{escaped}'",
+            out_fields='*',
+            limit=1000,
+            return_geometry=False,
+        )
+        ids = [int(f['attributes']['id']) for f in existing]
+        if ids:
+            GeoSceneService.delete_features(ids)
+            print(f"[Overwrite] Removed {len(ids)} old GeoScene features (batch: {batch_id})")
+    except GeoSceneError as e:
+        print(f"[Overwrite] GeoScene cleanup failed (batch {batch_id}): {e}")
 
 
 def _make_geojson_from_mask(
@@ -447,7 +486,7 @@ def _run_inference_task(task_id: str, file_path: str):
         transformer = Transformer.from_crs(tif_crs, "EPSG:4326", always_xy=True)
         transformer_utm = Transformer.from_crs("EPSG:4326", "EPSG:32650", always_xy=True)
 
-        batch_id = os.path.splitext(os.path.basename(file_path))[0]
+        batch_id = _stable_batch_id(file_path)
 
         # Step 0: Predict full canopy height map from RGB
         _update_progress(task_id, 0, 1, "Predicting canopy height...")
@@ -527,7 +566,10 @@ def _run_inference_task(task_id: str, file_path: str):
             tile_count += 1
             _update_progress(task_id, tile_count, total_tiles)
 
-        # Persist detected trees to database for spatial-diagnose
+        # 覆盖式重算：先清掉 GeoScene 上同 batch_id 的旧要素
+        _clear_geoscene_batch(batch_id)
+
+        # Persist detected trees to database for spatial-diagnose（内部会先删旧的）
         _persist_trees_sync(all_detected_trees, batch_id)
 
         # Publish to GeoScene FeatureServer

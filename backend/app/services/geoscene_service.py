@@ -243,3 +243,33 @@ class GeoSceneService:
             raise
         except Exception as e:
             raise GeoSceneError(f'GeoScene FeatureServer applyEdits failed: {e}')
+
+    @classmethod
+    def delete_features(cls, object_ids: list[int]) -> dict:
+        """Batch-delete features by objectId via applyEdits (deletes).
+
+        ``object_ids`` 是 layer 0 的 objectIdField（即 ``id``）值。
+        """
+        settings = get_settings()
+        token = cls._get_token()
+
+        if not object_ids:
+            return {}
+
+        try:
+            resp = httpx.post(
+                f'{settings.geoscene_feature_server_url}/0/applyEdits',
+                params={'f': 'json', 'token': token},
+                json={'deletes': ','.join(str(int(i)) for i in object_ids)},
+                verify=VERIFY_SSL,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            if 'error' in result:
+                raise GeoSceneError(f"applyEdits deletes failed: {result['error']}")
+            return result
+        except GeoSceneError:
+            raise
+        except Exception as e:
+            raise GeoSceneError(f'GeoScene FeatureServer applyEdits deletes failed: {e}')
