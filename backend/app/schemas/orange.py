@@ -144,18 +144,18 @@ class FertilizerPlanRequest(SpatialQuerySchema):
     weights: Optional[FertilizerWeights] = Field(None, description="各指标权重，缺省用默认配方")
     mode: str = Field("quantile", description="quantile=按区域内分位分级; fixed=固定阈值分级")
     thresholds: List[float] = Field(
-        default_factory=lambda: [0.25, 0.5, 0.75],
-        min_length=3,
-        max_length=3,
-        description="fixed模式的三档阈值，需满足 0<t1<t2<t3<1",
+        default_factory=lambda: [0.33, 0.67],
+        min_length=2,
+        max_length=2,
+        description="fixed模式的两档阈值，需满足 0<t1<t2<1",
     )
     apply: bool = Field(False, description="是否将推荐等级写回GeoScene（经FeatureServer applyEdits）")
 
     @model_validator(mode="after")
     def _check_thresholds(self) -> Self:
-        t1, t2, t3 = self.thresholds
-        if not (0 < t1 < t2 < t3 < 1):
-            raise ValueError("阈值必须满足 0 < t1 < t2 < t3 < 1")
+        t1, t2 = self.thresholds
+        if not (0 < t1 < t2 < 1):
+            raise ValueError("阈值必须满足 0 < t1 < t2 < 1")
         if self.mode not in ("quantile", "fixed"):
             raise ValueError("mode 只能为 quantile 或 fixed")
         return self
@@ -175,25 +175,17 @@ class FertilizerPlanItem(BaseModel):
     compact_score: float = Field(0.0, description="树冠紧密度归一化得分 0~1")
     slope_score: float = Field(0.0, description="坡度归一化得分 0~1（越大越陡）")
     demand_score: float = Field(0.0, description="综合需肥得分 0~1（越大越需施肥）")
-    current_level: int = Field(0, description="当前施肥等级 0~3")
-    recommended_level: int = Field(0, description="推荐施肥等级 0~3")
-
-
-class FertilizerLevelStat(BaseModel):
-    """各施肥等级树木数量统计（含0级）。"""
-    level_0_count: int = 0
-    level_1_count: int = 0
-    level_2_count: int = 0
-    level_3_count: int = 0
+    current_level: int = Field(0, description="当前施肥等级 (0:未计算, 1:轻度, 2:中度, 3:重度)")
+    recommended_level: int = Field(0, description="推荐施肥等级 (1:轻度, 2:中度, 3:重度)")
 
 
 class FertilizerPlanOut(BaseModel):
-    """变量施肥推荐输出（输出安检门）——权重配方 + 每棵树明细 + 四档统计。"""
+    """变量施肥推荐输出（输出安检门）——权重配方 + 每棵树明细 + 三档统计。"""
     total_trees: int = 0
     mode: str = "quantile"
     weights: FertilizerWeights
     thresholds: Optional[List[float]] = Field(None, description="实际采用的分级阈值")
-    summary: FertilizerLevelStat = Field(default_factory=FertilizerLevelStat)
+    summary: FertilizerStat = Field(default_factory=FertilizerStat)
     plan: List[FertilizerPlanItem] = Field(default_factory=list)
     applied: bool = False
 
@@ -219,7 +211,7 @@ class AlertTreeItem(BaseModel):
     lat: float
     growth_index: Optional[float] = Field(None, description="当前生长指数（缺失则更需关注）")
     area_m2: Optional[float] = Field(None, description="树冠面积 (m²)")
-    fertilizer_level: int = Field(0, description="当前施肥等级 0~3")
+    fertilizer_level: int = Field(0, description="当前施肥等级 (0:未计算, 1:轻度, 2:中度, 3:重度)")
 
 
 class AlertsOut(BaseModel):

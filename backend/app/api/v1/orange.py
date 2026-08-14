@@ -3,7 +3,7 @@ import shutil
 import uuid
 import math
 import json as json_mod
-from typing import Any
+from typing import Any, Dict
 
 from fastapi import APIRouter, File, UploadFile, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -22,7 +22,6 @@ from app.schemas.orange import (
     FertilizerWeights,
     FertilizerPlanRequest,
     FertilizerPlanItem,
-    FertilizerLevelStat,
     FertilizerPlanOut,
     FertilizerExportRequest,
     AlertTreeItem,
@@ -98,24 +97,24 @@ async def spatial_diagnose(
             lng, lat = round(g["x"], 6), round(g["y"], 6)
 
         trees_out.append(OrangeTreeOut(
-            id=a.get("tree_id"),
+            id=a.get("id"),
             batch_id=a.get("batch_id"),
             lng=lng,
             lat=lat,
             confidence=a.get("confidence"),
             compactness=a.get("compactness"),
-            shape_length=a.get("shape_len"),
-            shape_area=a.get("Shape__Area"),
-            value_field=a.get("val_field"),
-            count_field=a.get("cnt_field"),
+            shape_length=a.get("shape_length"),
+            shape_area=a.get("shape_area"),
+            value_field=a.get("value"),
+            count_field=a.get("count"),
             area_m2=a.get("area_m2"),
             height_m=a.get("height_m"),
-            crown_diameter=a.get("crown_diam"),
+            crown_diameter=a.get("crown_diameter"),
             volume_m3=a.get("volume_m3"),
-            growth_index=a.get("growth_idx"),
-            slope_degree=a.get("slope_deg"),
+            growth_index=a.get("growth_index"),
+            slope_degree=a.get("slope_degree"),
             aspect=a.get("aspect"),
-            fertilizer_level=a.get("fert_level"),
+            fertilizer_level=a.get("fertilizer_level"),
         ))
 
     return DiagnoseResultSchema(
@@ -166,24 +165,24 @@ async def get_historical_trees():
             lng, lat = round(g["x"], 6), round(g["y"], 6)
 
         trees_out.append(OrangeTreeOut(
-            id=a.get("tree_id"),
+            id=a.get("id"),
             batch_id=a.get("batch_id"),
             lng=lng,
             lat=lat,
             confidence=a.get("confidence"),
             compactness=a.get("compactness"),
-            shape_length=a.get("shape_len"),
-            shape_area=a.get("Shape__Area"),
-            value_field=a.get("val_field"),
-            count_field=a.get("cnt_field"),
+            shape_length=a.get("shape_length"),
+            shape_area=a.get("shape_area"),
+            value_field=a.get("value"),
+            count_field=a.get("count"),
             area_m2=a.get("area_m2"),
             height_m=a.get("height_m"),
-            crown_diameter=a.get("crown_diam"),
+            crown_diameter=a.get("crown_diameter"),
             volume_m3=a.get("volume_m3"),
-            growth_index=a.get("growth_idx"),
-            slope_degree=a.get("slope_deg"),
+            growth_index=a.get("growth_index"),
+            slope_degree=a.get("slope_degree"),
             aspect=a.get("aspect"),
-            fertilizer_level=a.get("fert_level"),
+            fertilizer_level=a.get("fertilizer_level"),
         ))
 
     return HistoricalTreesOut(total=len(trees_out), trees=trees_out)
@@ -634,15 +633,13 @@ def _minmax_normalize(values: list[float]) -> list[float]:
 
 
 def _map_score_to_level(score: float, thresholds: list[float]) -> int:
-    """需求得分 → 施肥等级 0~3（三档阈值 t1<t2<t3，越高施肥越重）。"""
-    t1, t2, t3 = thresholds
+    """需求得分 → 施肥等级 1~3（两档阈值 t1<t2，越高施肥越重，对齐 fertilizer_level 1/2/3 语义）。"""
+    t1, t2 = thresholds
     if score < t1:
-        return 0
+        return 1   # 轻度
     if score < t2:
-        return 1
-    if score < t3:
-        return 2
-    return 3
+        return 2   # 中度
+    return 3       # 重度
 
 
 @router.post(
@@ -658,8 +655,8 @@ async def fertilizer_plan(payload: FertilizerPlanRequest):
         demand_score = w1×(1-健康度) + w2×面积得分 + w3×(1-紧密度) + w4×坡度得分
         各指标先在框选区域内 min-max 归一化到 0~1，再加权求和。
 
-    **分级:** quantile（默认，按区域内 25/50/75 分位分四档，保证档位均衡）
-    或 fixed（固定三档阈值）。
+    **分级:** quantile（默认，按区域内 33/67 分位分三档，保证档位均衡）
+    或 fixed（固定两档阈值）。
 
     **写回:** apply=true 时经 GeoScene FeatureServer applyEdits 批量更新
     fertilizer_level（唯一写路径，不绕开 GeoScene）。
@@ -700,17 +697,16 @@ async def fertilizer_plan(payload: FertilizerPlanRequest):
     for f in features:
         attrs = f.get("attributes", {})
         geom = f.get("geometry", {})
-        # 层字段名遵循本项目约定（缩写）: growth_idx / fert_level / slope_deg
-        # API 输出仍用全名 growth_index / fertilizer_level / slope_degree
+        # 层字段全名: growth_index / fertilizer_level / slope_degree
         rows.append({
-            "id": attrs.get("id", 0),
+            "id": int(attrs.get("id", 0) or 0),
             "lng": round(geom.get("x", 0), 6) if geom else 0.0,
             "lat": round(geom.get("y", 0), 6) if geom else 0.0,
-            "growth_index": attrs.get("growth_idx"),
+            "growth_index": attrs.get("growth_index"),
             "area_m2": attrs.get("area_m2"),
             "compactness": attrs.get("compactness"),
-            "slope_degree": attrs.get("slope_deg"),
-            "current_level": int(attrs.get("fert_level", 0) or 0),
+            "slope_degree": attrs.get("slope_degree"),
+            "current_level": int(attrs.get("fertilizer_level", 0) or 0),
         })
 
     def _val(rows: list[dict], key: str, fallback: float = 0.0) -> list[float]:
@@ -743,9 +739,8 @@ async def fertilizer_plan(payload: FertilizerPlanRequest):
         sorted_scores = sorted(scores)
         n = len(sorted_scores)
         thresholds = [
-            sorted_scores[min(n - 1, n // 4)],
-            sorted_scores[min(n - 1, n // 2)],
-            sorted_scores[min(n - 1, 3 * n // 4)],
+            sorted_scores[min(n - 1, n // 3)],
+            sorted_scores[min(n - 1, 2 * n // 3)],
         ]
     else:
         thresholds = list(payload.thresholds)
@@ -756,7 +751,7 @@ async def fertilizer_plan(payload: FertilizerPlanRequest):
     applied = False
     if payload.apply:
         updates = [
-            {"attributes": {"id": r["id"], "fert_level": lvl}}
+            {"attributes": {"id": r["id"], "fertilizer_level": lvl}}
             for r, lvl in zip(rows, levels)
             if lvl != r["current_level"]
         ]
@@ -771,12 +766,11 @@ async def fertilizer_plan(payload: FertilizerPlanRequest):
                 )
         applied = True
 
-    # 步骤 6: 四档统计 + 每棵树明细
-    stat = FertilizerLevelStat(
-        level_0_count=levels.count(0),
-        level_1_count=levels.count(1),
-        level_2_count=levels.count(2),
-        level_3_count=levels.count(3),
+    # 步骤 6: 三档统计 + 每棵树明细（对齐 FertilizerStat 的 light/medium/heavy）
+    stat = FertilizerStat(
+        light_level_count=levels.count(1),
+        medium_level_count=levels.count(2),
+        heavy_level_count=levels.count(3),
     )
 
     plan_items = []
@@ -882,8 +876,8 @@ async def fertilizer_plan_export(payload: FertilizerExportRequest):
 
 
 def _build_alerts_where(growth_threshold: float) -> str:
-    """构造弱树告警查询条件（低于阈值或指标缺失都算弱树）。层字段用缩写 growth_idx。"""
-    return f"growth_idx < {growth_threshold} OR growth_idx IS NULL"
+    """构造弱树告警查询条件（低于阈值或指标缺失都算弱树）。层字段全名 growth_index。"""
+    return f"growth_index < {growth_threshold} OR growth_index IS NULL"
 
 
 @router.get(
@@ -923,12 +917,12 @@ async def tree_alerts(
         geom = f.get("geometry", {})
         alerts.append(
             AlertTreeItem(
-                id=int(attrs.get("id", 0)),
+                id=int(attrs.get("id", 0) or 0),
                 lng=round(geom.get("x", 0.0), 6) if geom else 0.0,
                 lat=round(geom.get("y", 0.0), 6) if geom else 0.0,
-                growth_index=attrs.get("growth_idx"),
+                growth_index=attrs.get("growth_index"),
                 area_m2=attrs.get("area_m2"),
-                fertilizer_level=int(attrs.get("fert_level", 0) or 0),
+                fertilizer_level=int(attrs.get("fertilizer_level", 0) or 0),
             )
         )
     return AlertsOut(

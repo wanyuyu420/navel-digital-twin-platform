@@ -47,27 +47,23 @@ class TestMinmaxNormalize:
 
 
 class TestMapScoreToLevel:
-    THRESHOLDS = [0.25, 0.5, 0.75]
+    THRESHOLDS = [0.33, 0.67]
 
-    def test_below_t1_is_level0(self):
-        assert _map_score_to_level(0.0, self.THRESHOLDS) == 0
-        assert _map_score_to_level(0.249, self.THRESHOLDS) == 0
+    def test_below_t1_is_level1(self):
+        assert _map_score_to_level(0.0, self.THRESHOLDS) == 1
+        assert _map_score_to_level(0.329, self.THRESHOLDS) == 1
 
-    def test_between_t1_t2_is_level1(self):
-        assert _map_score_to_level(0.25, self.THRESHOLDS) == 1
-        assert _map_score_to_level(0.499, self.THRESHOLDS) == 1
+    def test_between_t1_t2_is_level2(self):
+        assert _map_score_to_level(0.33, self.THRESHOLDS) == 2
+        assert _map_score_to_level(0.669, self.THRESHOLDS) == 2
 
-    def test_between_t2_t3_is_level2(self):
-        assert _map_score_to_level(0.5, self.THRESHOLDS) == 2
-        assert _map_score_to_level(0.749, self.THRESHOLDS) == 2
-
-    def test_above_t3_is_level3(self):
-        assert _map_score_to_level(0.75, self.THRESHOLDS) == 3
+    def test_above_t2_is_level3(self):
+        assert _map_score_to_level(0.67, self.THRESHOLDS) == 3
         assert _map_score_to_level(1.0, self.THRESHOLDS) == 3
 
     def test_custom_thresholds(self):
         """自定义阈值同样生效。"""
-        assert _map_score_to_level(0.4, [0.3, 0.5, 0.7]) == 1
+        assert _map_score_to_level(0.4, [0.3, 0.5]) == 2
 
 
 # FertilizerWeights — 权重配方
@@ -129,7 +125,7 @@ class TestFertilizerPlanRequest:
             FertilizerPlanRequest(
                 coordinates=CLOSED_POLYGON,
                 mode="fixed",
-                thresholds=[0.7, 0.5, 0.3],
+                thresholds=[0.7, 0.5],
             )
 
     def test_thresholds_out_of_range_rejected(self):
@@ -137,14 +133,14 @@ class TestFertilizerPlanRequest:
             FertilizerPlanRequest(
                 coordinates=CLOSED_POLYGON,
                 mode="fixed",
-                thresholds=[0.3, 1.5, 2.0],
+                thresholds=[0.3, 1.5],
             )
 
     def test_valid_fixed_request(self):
         req = FertilizerPlanRequest(
             coordinates=CLOSED_POLYGON,
             mode="fixed",
-            thresholds=[0.3, 0.5, 0.7],
+            thresholds=[0.3, 0.5],
             apply=True,
         )
         assert req.mode == "fixed"
@@ -207,7 +203,7 @@ class TestDemandScoreFormula:
         out = FertilizerPlanOut(
             total_trees=1,
             weights=FertilizerWeights(),
-            summary={"level_0_count": 0, "level_1_count": 1, "level_2_count": 0, "level_3_count": 0},
+            summary={"light_level_count": 1, "medium_level_count": 0, "heavy_level_count": 0},
             plan=[item],
         )
         assert out.total_trees == 1
@@ -217,7 +213,7 @@ class TestDemandScoreFormula:
 # 处方图导出 — CSV / GeoJSON 纯函数
 
 
-def _make_plan(levels=(1, 2, 3, 0)) -> FertilizerPlanOut:
+def _make_plan(levels=(1, 2, 3, 1)) -> FertilizerPlanOut:
     """构造一个含4棵树的推荐方案（避免网络/GeoScene依赖）。"""
     plan_items = [
         FertilizerPlanItem(
@@ -235,7 +231,7 @@ def _make_plan(levels=(1, 2, 3, 0)) -> FertilizerPlanOut:
     return FertilizerPlanOut(
         total_trees=len(plan_items),
         weights=FertilizerWeights(),
-        summary={"level_0_count": 1, "level_1_count": 1, "level_2_count": 1, "level_3_count": 1},
+        summary={"light_level_count": 2, "medium_level_count": 1, "heavy_level_count": 1},
         plan=plan_items,
     )
 
@@ -285,7 +281,7 @@ class TestPlanToGeojson:
         """推荐等级完整进入要素属性，供前端着色。"""
         gj = _plan_to_geojson(_make_plan())
         levels = [f["properties"]["recommended_level"] for f in gj["features"]]
-        assert levels == [1, 2, 3, 0]
+        assert levels == [1, 2, 3, 1]
 
 
 # 弱树告警 — 查询条件构造 + 输出模型

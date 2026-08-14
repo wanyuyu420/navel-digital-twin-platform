@@ -77,7 +77,7 @@ class GeoSceneService:
             fs.raise_for_status()
             fs_data = fs.json()
             if 'error' in fs_data:
-                raise GeoSceneError(f'FeatureServer unavailable: {fs_data['error']}')
+                raise GeoSceneError(f"FeatureServer unavailable: {fs_data['error']}")
         except GeoSceneError:
             raise
         except Exception as e:
@@ -129,7 +129,7 @@ class GeoSceneService:
             resp.raise_for_status()
             data = resp.json()
             if 'error' in data:
-                raise GeoSceneError(f'Query failed: {data['error']}')
+                raise GeoSceneError(f"Query failed: {data['error']}")
             return data.get('features', [])
         except GeoSceneError:
             raise
@@ -167,10 +167,10 @@ class GeoSceneService:
         attrs = [f['attributes'] for f in features]
         heights = [a.get('height_m') for a in attrs if a.get('height_m')]
         areas = [a.get('area_m2') for a in attrs if a.get('area_m2')]
-        gis = [a.get('growth_idx') for a in attrs if a.get('growth_idx')]
+        gis = [a.get('growth_index') for a in attrs if a.get('growth_index')]
 
         def _count_level(level: int) -> int:
-            return sum(1 for a in attrs if a.get('fert_level') == level)
+            return sum(1 for a in attrs if a.get('fertilizer_level') == level)
 
         return {
             'total_count': len(features),
