@@ -10,6 +10,11 @@ import httpx
 from app.config import get_settings
 
 
+# GeoScene(ArcGIS) 服务默认使用自签名证书，局域网环境下需关闭 SSL 校验；
+# 若换成受信任的正式证书，把这里改回 True 即可恢复校验。
+VERIFY_SSL = False
+
+
 class GeoSceneError(Exception):
     """Raised when GeoScene Server is unavailable. System must refuse to run."""
 
@@ -34,11 +39,11 @@ class GeoSceneService:
                 data={
                     "username": settings.geoscene_username,
                     "password": settings.geoscene_password,
-                    "client": "referer",
-                    "referer": settings.geoscene_server_url,
+                    "client": "requestip",
                     "expiration": settings.geoscene_token_duration,
                     "f": "json",
                 },
+                verify=VERIFY_SSL,
                 timeout=15,
             )
             resp.raise_for_status()
@@ -60,6 +65,7 @@ class GeoSceneService:
             info = httpx.get(
                 f'{settings.geoscene_server_url}/rest/info',
                 params={'f': 'json'},
+                verify=VERIFY_SSL,
                 timeout=15,
             )
             info.raise_for_status()
@@ -72,6 +78,7 @@ class GeoSceneService:
             fs = httpx.get(
                 f'{settings.geoscene_feature_server_url}',
                 params={'f': 'json', 'token': token},
+                verify=VERIFY_SSL,
                 timeout=15,
             )
             fs.raise_for_status()
@@ -124,6 +131,7 @@ class GeoSceneService:
             resp = httpx.get(
                 f'{settings.geoscene_feature_server_url}/0/query',
                 params=params,
+                verify=VERIFY_SSL,
                 timeout=30,
             )
             resp.raise_for_status()
@@ -192,6 +200,7 @@ class GeoSceneService:
                 f'{settings.geoscene_feature_server_url}/0/applyEdits',
                 params={'f': 'json', 'token': token},
                 json={'adds': features},
+                verify=VERIFY_SSL,
                 timeout=120,
             )
             resp.raise_for_status()
@@ -222,6 +231,7 @@ class GeoSceneService:
                 f'{settings.geoscene_feature_server_url}/0/applyEdits',
                 params={'f': 'json', 'token': token},
                 json={'updates': updates},
+                verify=VERIFY_SSL,
                 timeout=120,
             )
             resp.raise_for_status()
